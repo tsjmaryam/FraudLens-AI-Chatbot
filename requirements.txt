@@ -1,0 +1,11 @@
+streamlit>=1.36
+pandas>=2.1
+numpy>=1.26
+scikit-learn>=1.4
+interpret>=0.5
+joblib>=1.4
+python-dotenv>=1.0
+openai>=1.30
+matplotlib>=3.8
+seaborn>=0.13
+tqdm>=4.66
