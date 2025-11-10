@@ -3,40 +3,92 @@ import os, io, re, json, joblib, numpy as np, pandas as pd, streamlit as st
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from pandas.api.types import is_categorical_dtype
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics.pairwise import linear_kernel
+import shap
+import traceback
+from textwrap import dedent
+import matplotlib.pyplot as plt
 from dotenv import load_dotenv
 load_dotenv()
 
 
-st.set_page_config(page_title="FraudLock", page_icon="🤖", layout="wide")
-# --- FraudLock header (logo + title aligned left) ---
-def header_with_inline_logo(img_path: str, title="FraudLock", subtitle="A professional fraud detection assistant", height=64):
-    p = Path(img_path)
-    if not p.exists():
-        st.warning(f"Logo not found: {img_path}")
-        img_tag = ""
-    else:
-        data = base64.b64encode(p.read_bytes()).decode()
-        img_tag = f'<img src="data:image/{p.suffix.lstrip(".")};base64,{data}" style="height:{height}px;">'
+st.set_page_config(page_title="FraudLens", page_icon="🤖", layout="wide")
 
-    st.markdown(f"""
+# --- FraudLens header (logo + title aligned left, GW logo right) ---
+def header_with_inline_logo(left_img: str,
+                            gw_img: str,
+                            title="FraudLens",
+                            subtitle="A professional fraud detection assistant",
+                            height=64,
+                            gw_width=160):
+    left_logo = ""
+    p = Path(left_img)
+    if p.exists():
+        left_logo_data = base64.b64encode(p.read_bytes()).decode()
+        left_logo = f'<img src="data:image/{p.suffix.lstrip(".")};base64,{left_logo_data}" style="height:{height}px;">'
+    else:
+        st.warning(f"Logo not found: {left_img}")
+
+    gw_logo = ""
+    gp = Path(gw_img)
+    if gp.exists():
+        gw_logo_data = base64.b64encode(gp.read_bytes()).decode()
+        gw_logo = f'<img src="data:image/{gp.suffix.lstrip(".")};base64,{gw_logo_data}" style="width:{gw_width}px;">'
+    else:
+        st.warning(f"GW Logo not found: {gw_img}")
+
+    html = dedent(f"""
     <style>
     .header-container {{
-        display:flex; align-items:center; gap:12px; margin-bottom:0.5rem;
+      width:100%;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      margin-bottom:0.8rem;
+    }}
+    .header-left {{
+      display:flex; align-items:center; gap:12px;
     }}
     .header-title {{ font-size:2.3rem; font-weight:700; color:white; margin:0; }}
     .header-subtitle {{ color:gray; font-size:1.1rem; margin-top:-0.2rem; }}
     </style>
     <div class="header-container">
-        {img_tag}
+      <div class="header-left">
+        {left_logo}
         <div>
-            <div class="header-title">{title}</div>
-            <div class="header-subtitle">{subtitle}</div>
+          <div class="header-title">{title}</div>
+          <div class="header-subtitle">{subtitle}</div>
         </div>
+      </div>
+      {gw_logo}
     </div>
-    """, unsafe_allow_html=True)
+    """)
+    st.markdown(html, unsafe_allow_html=True)
 
-header_with_inline_logo("image/1.png")
+header_with_inline_logo("image/1.png", "image/GWSB Short White.png")
 st.caption("A professional fraud detection assistant — now with explanations for every decision.")
+
+
+st.markdown("""
+<style>
+/* -------- Page background -------- */
+.stApp {
+    background-color: #1D314F !important;
+}
+
+/* -------- Make all text readable on dark background -------- */
+html, body, [class*="css"] {
+    color: #FFFFFF !important;
+}
+
+/* subtitle */
+.stCaption, .stMarkdown p {
+    color: #CCCCCC !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 MODEL_PATH = "./_model_/ebm_fraud_model.pkl"
 MERGED_CSV = "./_data_/_merge_/merged_data.csv"
@@ -46,8 +98,7 @@ from openai import OpenAI
 OPENAI_MODEL = "gpt-3.5-turbo"
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-
-CATEGORICAL_COLS = ["use_chip","card_brand","card_type","has_chip","mcc_desc","zip3","merchant_state","entry_mode","is_refund"]
+CATEGORICAL_COLS = ["use_chip","merchant_state","card_brand","card_type","has_chip","merchant_type"]
 TIME_COLS = ["hour","dayofweek","month","year"]
 
 @st.cache_resource(show_spinner=False)
@@ -76,17 +127,426 @@ def load_artifacts() -> Tuple[Any, float, List[str], pd.DataFrame]:
                     break
                 except Exception:
                     pass
-    if features is None and not df.empty:
-        features = [c for c in df.columns if c not in {"is_fraud","id"}]
 
     return model, best_th, features or [], df
 
+def to_model_input(df_in: pd.DataFrame) -> pd.DataFrame:
+    # Align → derive time → impute exactly as you do now
+    Xp = impute_for_model(align_columns(light_preprocess(df_in.copy())))
+    # Coerce categoricals to string for safety (OneHot/EBM prefer object/str)
+    for c in CATEGORICAL_COLS:
+        if c in Xp.columns:
+            Xp[c] = Xp[c].astype(str)
+    # Guard shape/order
+    Xp = Xp.reindex(columns=FEATURE_LIST)
+    assert Xp.shape[1] == len(FEATURE_LIST), "Feature count mismatch after reindex"
+    return Xp
+
+@st.cache_resource(show_spinner=False)
+def get_shap_background(max_rows: int = 200) -> pd.DataFrame:
+    try:
+        if DB is not None and not DB.empty:
+            base = DB.sample(min(max_rows, len(DB)), random_state=0).copy()
+        else:
+            base = pd.DataFrame([{}])
+    except Exception:
+        base = pd.DataFrame([{}])
+
+    base = align_columns(light_preprocess(base))
+    
+    if len(base) < 20:
+        times = max(1, 20 // max(1, len(base)))
+        base = pd.concat([base] * times, ignore_index=True)
+    
+    return base
+
+@st.cache_resource(show_spinner=False)
+def get_shap_explainer():
+    """
+    Build and cache a SHAP Explainer.
+    Prefer using shap.Explainer(MODEL, background)
+    If the model does not support it, fall back to KernelExplainer (automatically handled by shap).
+    """
+    try:
+        background = get_shap_background()
+        if MODEL is None or background is None or background.empty:
+            return None, background
+
+        keep = [c for c in FEATURE_LIST if c in background.columns]
+        extra = sorted(set(background.columns) - set(FEATURE_LIST))
+        if extra:
+            try:
+                st.warning(f"Extra columns in background ignored: {extra}")
+            except Exception:
+                pass
+        
+        background = background[keep].copy()
+        for c in FEATURE_LIST:
+            if c not in background.columns:
+                background[c] = "Unknown" if c in CATEGORICAL_COLS else 0
+        
+        background = background[FEATURE_LIST]
+        background = impute_for_model(background.copy())
+
+        def f(X_like):
+            try:
+                if isinstance(X_like, pd.DataFrame):
+                    df_in = X_like.copy()
+                    df_in = df_in.reindex(columns=list(background.columns), fill_value=np.nan)
+                else:
+                    arr = np.asarray(X_like)
+                    if arr.ndim == 1:
+                        arr = arr.reshape(1, -1)
+                    df_in = pd.DataFrame(arr, columns=list(background.columns))
+
+                Xp = to_model_input(df_in)
+
+                # Predict → probability ∈ (0,1)
+                if hasattr(MODEL, "predict_proba"):
+                    p = MODEL.predict_proba(Xp)[:, 1]
+                elif hasattr(MODEL, "predict"):
+                    yhat = MODEL.predict(Xp)
+                    # scale to [0,1]
+                    p = (yhat - np.min(yhat)) / (np.ptp(yhat) + 1e-9)
+                else:
+                    p = np.zeros(len(Xp), dtype=float)
+
+                # Avoid logit(0) / logit(1)
+                p = np.clip(p, 1e-6, 1 - 1e-6)
+                p = np.nan_to_num(p, nan=1e-6, posinf=1-1e-6, neginf=1e-6).astype(float)
+                if p.ndim != 1:
+                    p = np.ravel(p)
+                return p
+            except Exception as e:
+                st.error(f"Model function raised: {e}")
+                st.code(traceback.format_exc())
+                raise  # re-raise so SHAP stops cleanly
+    
+        explainer = shap.KernelExplainer(f, background, link="logit")
+        return explainer, background
+    
+    except Exception as e:
+        st.error(f"Failed to create SHAP KernelExplainer: {e}")
+        st.code(traceback.format_exc())
+        return None, None
+
+
+def pretty_explanation(exp, X_row_df):
+    e = exp[0]
+    names = list(X_row_df.columns)
+    raw_vals = []
+    for name in names:
+        v = X_row_df.iloc[0][name]
+        if is_categorical_dtype(X_row_df[name].dtype):
+            v = str(v)
+        raw_vals.append(v)
+    return shap.Explanation(
+        values=e.values,
+        base_values=e.base_values,
+        data=np.array(raw_vals, dtype=object),
+        feature_names=names
+    )
+
+# ----- Make waterfall simpler -----
+def shap_waterfall_png_for_row(X_row: pd.DataFrame, figsize=(7,5)) -> str:
+    try:
+        explainer, _ = get_shap_explainer()
+        if explainer is None or X_row is None or X_row.empty:
+            return ""
+        
+        # Ensure imputed & correct order (paranoia)
+        X_row = to_model_input(X_row).iloc[[0]]
+        exp = explainer(X_row)
+        single = pretty_explanation(exp, X_row)
+
+        # Start clean: close any stale figs, then let SHAP draw on the new current fig
+        plt.close("all")       
+        plt.figure(figsize=figsize)
+
+        try:
+            shap.plots.waterfall(single, show=False, max_display=10)
+        except Exception:
+            shap.plots.bar(single, show=False, max_display=10)
+        
+        # Grab the figure SHAP actually drew on
+        fig = plt.gcf()
+        ax = plt.gca()
+
+        fmt_decimals = 3
+        for t in list(ax.texts):
+            s = t.get_text() or ""
+            s_clean = s.replace('−','-').strip()
+            m = re.match(r'^([+\-]?\s*\d+(?:\.\d+)?)(.*)$', s_clean)
+            if m:
+                try:
+                    val = float(m.group(1).replace(' ', ''))
+                    tail = m.group(2)
+                    t.set_text(f'{val:+.{fmt_decimals}f}{tail}')
+                except:
+                    pass
+
+        buf = io.BytesIO()
+        fig.tight_layout()
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+    except Exception as e:
+        print("SHAP plotting failed:", e)
+        return ""
+
 MODEL, BEST_TH, FEATURE_LIST, DB = load_artifacts()
 
-def add_zip3(df: pd.DataFrame) -> pd.DataFrame:
-    if "zip3" not in df.columns and "zip" in df.columns:
-        df["zip3"] = df["zip"].astype(str).str[:3]
-    return df
+@st.cache_resource(show_spinner=False)
+def compute_baseline_fill() -> Dict[str, Any]:
+
+    fill = {}
+
+    try:
+        src = DB.copy() if (DB is not None and not DB.empty) else get_shap_background().copy()
+    except Exception:
+        src = pd.DataFrame(columns=FEATURE_LIST)
+
+
+    for c in FEATURE_LIST:
+        if c not in src.columns:
+
+            fill[c] = "Unknown" if c in CATEGORICAL_COLS else 0.0
+            continue
+
+        s = src[c]
+        if c in CATEGORICAL_COLS:
+
+            try:
+                mode = s.dropna().astype("string").mode().iloc[0]
+                fill[c] = str(mode) if pd.notna(mode) else "Unknown"
+            except Exception:
+                fill[c] = "Unknown"
+        else:
+
+            try:
+                num = pd.to_numeric(s, errors="coerce")
+                med = num.median()
+                fill[c] = float(med) if pd.notna(med) else 0.0
+            except Exception:
+                fill[c] = 0.0
+
+    return fill
+
+BASELINE_FILL = compute_baseline_fill()
+
+
+# ---------------------- Markdown KB load ----------------------
+@st.cache_resource(show_spinner=False)
+def load_patterns_md(md_path: str) -> pd.DataFrame:
+    """
+    read markdown kb：based on “## title + Body paragraph”。
+    return DataFrame: [title, text, source, kb_type]
+    """
+    p = Path(md_path)
+    if not p.exists():
+        st.warning(f"[KB] Patterns MD not found: {p}")
+        return pd.DataFrame(columns=["title","text","source","kb_type"])
+
+    raw = p.read_text(encoding="utf-8", errors="ignore")
+
+    rows = []
+    for m in re.finditer(r"^##\s+(.+?)\n(.*?)(?=^##\s+|\Z)", raw, flags=re.S|re.M):
+        title = m.group(1).strip()
+        body  = re.sub(r"^---+\s*$", "", m.group(2), flags=re.M).strip()
+        if title and body:
+            rows.append({
+                "title": title,
+                "text": body,
+                "source": f"{p.name}::{title}",
+                "kb_type": "pattern"
+            })
+    return pd.DataFrame(rows, columns=["title","text","source","kb_type"])
+
+@st.cache_resource(show_spinner=False)
+def load_kb():
+    """
+    Load the knowledge base: feature definition library + risk pattern library,
+    Build a TF-IDF vectorizer and matrix.
+    Return: kb_df, vectorizer, matrix
+    """
+    FEATURES_CSV_PATH = "./.doc/fraud_knowledge_base_features.csv"
+    PATTERNS_MD_PATH  = "./.doc/fraud_knowledge_base_patterns.md"
+
+    # 1) read feature CSV
+    try:
+        kb_csv = pd.read_csv(FEATURES_CSV_PATH, encoding="utf-8")
+    except Exception:
+        kb_csv = pd.read_csv(FEATURES_CSV_PATH, sep=";", encoding_errors="ignore")
+
+    if "text" not in kb_csv.columns:
+        kb_csv["text"] = (
+            kb_csv.get("category", "").astype(str).str.strip() + " || " +
+            kb_csv.get("tags", "").astype(str).str.strip() + " || " +
+            kb_csv.get("description", kb_csv.get("detail", kb_csv.get("notes",""))).astype(str).str.strip()
+        )
+
+    if "title" not in kb_csv.columns:
+        kb_csv["title"] = kb_csv.get("tags", kb_csv.get("category", "feature_definition"))
+
+    kb_csv["source"]  = "fraud_knowledge_base_features.csv"
+    kb_csv["kb_type"] = "feature"
+    kb_csv = kb_csv[["title","text","source","kb_type"]].copy()
+
+    # 2) read Markdown
+    kb_md = load_patterns_md(PATTERNS_MD_PATH)  # -> [title,text,source,kb_type]
+
+    # 3) merge and clean
+    kb = pd.concat([kb_csv, kb_md], ignore_index=True)
+    kb["text"] = kb["text"].fillna("").astype(str)
+    kb = kb[kb["text"].str.strip() != ""].drop_duplicates(subset=["kb_type","title","text"])
+
+    # 4) build TF-IDF
+    if kb.empty:
+        return kb, None, None
+
+    kb["__fulltext"] = (kb["title"].fillna("") + " " + kb["text"].fillna("")).str.lower()
+    vectorizer = TfidfVectorizer(max_features=30000, ngram_range=(1, 2))
+    matrix = vectorizer.fit_transform(kb["__fulltext"])
+
+    return kb, vectorizer, matrix
+
+KB_DF, KB_VEC, KB_MAT = load_kb()
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^\w\s]+", " ", (s or "").lower()).strip()
+
+def kb_search(query: str, k: int = 5, score_threshold: float = 0.10):
+    """use TF-IDF and linear similarity to find the k most relevant results from the knowledge base."""
+    if not query or KB_DF is None or KB_VEC is None or KB_MAT is None:
+        return []
+
+    try:
+        qv = KB_VEC.transform([_norm(query)])
+        sims = linear_kernel(qv, KB_MAT).ravel()
+    except Exception:
+        return []
+
+    # bigger filter
+    idx = sims.argsort()[::-1][:max(k, 10)]
+    cand = []
+    for i in idx:
+        row = KB_DF.iloc[i]
+        cand.append({
+            "title":  str(row.get("title","")),
+            "text":   str(row.get("text","")),
+            "source": str(row.get("source","")),
+            "kb_type":row.get("kb_type",""),
+            "score":  float(sims[i]),
+        })
+    hits = [r for r in cand if r["score"] >= score_threshold][:k]
+    if hits:
+        return hits
+
+    # P1: title contained
+    qn = _norm(query)
+    mask = KB_DF["title"].str.lower().str.contains(qn, na=False)
+    fb1 = []
+    for _, row in KB_DF[mask].head(k).iterrows():
+        fb1.append({
+            "title": str(row.get("title","")),
+            "text":  str(row.get("text","")),
+            "source":str(row.get("source","")),
+            "kb_type":row.get("kb_type",""),
+            "score": 0.09
+        })
+    if fb1:
+        return fb1
+
+    # P2: fuzzy match title
+    import difflib
+    scored = []
+    for i, row in KB_DF.iterrows():
+        ratio = difflib.SequenceMatcher(None, qn, _norm(row.get("title",""))).ratio()
+        if ratio >= 0.6:
+            scored.append((ratio, i))
+    scored.sort(reverse=True)
+
+    fb2 = []
+    for ratio, i in scored[:k]:
+        row = KB_DF.iloc[i]
+        fb2.append({
+            "title": str(row.get("title","")),
+            "text":  str(row.get("text","")),
+            "source":str(row.get("source","")),
+            "kb_type":row.get("kb_type",""),
+            "score": float(ratio)
+        })
+    return fb2
+
+def kb_blurbs_for_features(names: List[str], k_each: int = 1):
+    """
+    For each feature name appearing in the prediction, find a brief description.
+    If your current knowledge base doesn't have a "feature" column, we'll use fuzzy matching based on tags/text.
+    """
+    if KB_DF is None:
+        return []
+    out = []
+    for n in (names or []):
+        # in tags
+        hit = KB_DF.loc[KB_DF.get("tags", pd.Series([])).astype(str).str.contains(fr"\b{re.escape(str(n))}\b", case=False, regex=True)]
+        if not hit.empty:
+            for _, r in hit.head(k_each).iterrows():
+                out.append({"feature": n, "description": str(r.get("text",""))})
+            continue
+        # not in tags
+        top = kb_search(n, k=k_each, score_threshold=0.10)
+        for r in top:
+            out.append({"feature": n, "description": r["text"]})
+    return out
+
+def detect_lang(s: str) -> str:
+    """
+    language detection
+    """
+    s = str(s or "")
+    # if have Chinese characters
+    if any('\u4e00' <= ch <= '\u9fff' for ch in s):
+        return "zh"
+    # have English words
+    if re.search(r"[A-Za-z]", s):
+        return "en"
+    # backup: en
+    return "en"
+
+def gpt_answer_with_kb(question: str) -> str:
+    ctx = kb_search(question, k=5)
+    if not ctx:
+        return "Insufficient evidence from knowledge base. Try keywords like: velocity spike / CNP / MCC."
+
+    bullets = []
+    for r in ctx:
+        badge = "🟧 Pattern" if r.get("kb_type")=="pattern" else "🟦 Feature"
+        title = r.get("title","(no title)")
+        src   = r.get("source","")
+        txt   = (r.get("text","") or "").strip()
+        bullets.append(f"- {badge} **{title}** · _{src}_\n  {txt}")
+    context = "\n".join(bullets)
+
+    lang = detect_lang(question)
+    lang_name = "Chinese" if lang == "zh" else "English"
+
+    sys = (
+        "You are a fraud analytics assistant.\n"
+        "ONLY use the provided context; if something is missing, say you don't know.\n"
+        "Be concise and practical.\n"
+        f"Reply ONLY in {lang_name}."
+    )
+    user = f"Question:\n{question}\n\nContext:\n{context}"
+
+    try:
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role":"system","content":sys},{"role":"user","content":user}],
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f"(RAG failed: {e})\n\n{context}"
 
 def derive_time(df: pd.DataFrame) -> pd.DataFrame:
     if any(c not in df.columns for c in TIME_COLS) and "date" in df.columns:
@@ -96,29 +556,48 @@ def derive_time(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def light_preprocess(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy(); df = derive_time(add_zip3(df))
+    df = df.copy()
+    df = derive_time(df)
+
     if "amount" in df.columns:
         df["amount"] = (
-            df["amount"].astype(str).str.replace(r"[^0-9\.\-]","",regex=True).replace("",np.nan).astype(float)
+            df["amount"].astype(str).str.replace(r"[^0-9\.\-]","",regex=True).replace("", np.nan).astype(float)
         )
     for c in df.columns:
         if c in CATEGORICAL_COLS:
-            df[c] = df[c].astype("string").fillna("Unknown").astype("category")
+            df[c] = df[c].astype("category")
         else:
             if df[c].dtype.kind not in "biufc":
                 df[c] = pd.to_numeric(df[c], errors="ignore")
-            if df[c].dtype.kind in "biufc":
-                df[c] = df[c].fillna(df[c].median() if not df[c].isna().all() else 0)
     return df
 
 def align_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+    keep = [c for c in FEATURE_LIST if c in df.columns]
+    df = df[keep]
     for c in FEATURE_LIST:
         if c not in df.columns:
-            df[c] = "Unknown" if c in CATEGORICAL_COLS else 0
-    df = df[FEATURE_LIST] if FEATURE_LIST else df
+            df[c] = np.nan
+    df = df[FEATURE_LIST]
     for c in df.columns:
-        if c in CATEGORICAL_COLS: df[c] = df[c].astype("category")
+        if c in CATEGORICAL_COLS:
+            df[c] = df[c].astype("category")
+    return df
+
+def impute_for_model(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for c in FEATURE_LIST:
+        if c in CATEGORICAL_COLS:
+            # Use plain Python strings in an object-dtype column
+            s = df[c].astype(object)
+            fill = BASELINE_FILL.get(c, None)
+            if fill is None or (pd.isna(fill) if isinstance(fill, float) else False):
+                # fallback to per-column mode (if any), else empty string
+                fill = s.dropna().mode().iloc[0] if not s.dropna().empty else ""
+            df[c] = s.fillna(str(fill))
+        else:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+            df[c] = df[c].fillna(BASELINE_FILL.get(c, 0.0))
     return df
 
 def score_rows(df: pd.DataFrame):
@@ -127,11 +606,12 @@ def score_rows(df: pd.DataFrame):
         if "amount" in df.columns:
             amt = pd.to_numeric(df["amount"], errors="coerce").fillna(0).values
             base += (amt > np.nanpercentile(amt, 90)).astype(float) * 0.4
-        if "is_refund" in df.columns:
-            base += (pd.to_numeric(df["is_refund"], errors="coerce").fillna(0).values > 0).astype(float) * 0.4
-        proba = np.clip(base, 0, 1); pred = (proba >= BEST_TH).astype(int); return proba, pred
+        proba = np.clip(base, 0, 1)
+        pred = (proba >= BEST_TH).astype(int)
+        return proba, pred
 
-    X = align_columns(light_preprocess(df))
+    X = to_model_input(df.copy())
+
     try:
         if hasattr(MODEL, "predict_proba"):
             proba = MODEL.predict_proba(X)[:, -1]
@@ -147,9 +627,6 @@ def score_rows(df: pd.DataFrame):
     return proba, pred
 
 # ---------- helpers to safely snapshot features (no Categorical fillna problems)
-
-from pandas.api.types import is_categorical_dtype
-
 def snapshot_first_row(df: pd.DataFrame) -> Dict[str, Any]:
     """Safely extract the first line feature (avoid misuse of fillna/repeated addition of Unknown in Categorical)."""
     snap = {}
@@ -172,25 +649,22 @@ def snapshot_first_row(df: pd.DataFrame) -> Dict[str, Any]:
 
 # -------------------- JSON tool --------------------------
 def _to_jsonable(x):
-    import numpy as _np
-    import pandas as _pd
-
     if isinstance(x, dict):
         return {k: _to_jsonable(v) for k, v in x.items()}
     if isinstance(x, (list, tuple)):
         return [_to_jsonable(v) for v in x]
 
     # NumPy / pandas variables
-    if isinstance(x, (_np.integer,)):
+    if isinstance(x, (np.integer,)):
         return int(x)
-    if isinstance(x, (_np.floating,)):
+    if isinstance(x, (np.floating,)):
         return float(x)
-    if isinstance(x, (_np.bool_,)):
+    if isinstance(x, (np.bool_,)):
         return bool(x)
 
     # pandas NA → None
     try:
-        if _pd.isna(x):
+        if pd.isna(x):
             return None
     except Exception:
         pass
@@ -199,9 +673,44 @@ def _to_jsonable(x):
     return x
 
 
+# ----- Replace EBM contribution with SHAP contribution for better align and explanation -----
+def shap_top_contribs_row(X_row: pd.DataFrame, topn: int = 5):
+    try:
+        explainer, _ = get_shap_explainer()
+        if explainer is None or X_row is None or X_row.empty:
+            return []
+        X_row = to_model_input(X_row).iloc[[0]]
+        exp = explainer(X_row)
+        e = exp[0]
+        feat_names = list(getattr(e, "feature_names", None) or list(X_row.columns))
+        data_row = getattr(e, "data", None)
+        if data_row is None:
+            data_row = X_row.iloc[0].values
+        else:
+            data_row = data_row if np.ndim(data_row) == 1 else data_row[0]
+
+        vals = np.array(e.values, dtype=float)  # φ_i (logit)
+
+        pairs = []
+        for name, v, val in zip(feat_names, data_row, vals):
+            if isinstance(v, np.generic):
+                v = v.item()
+            if not isinstance(v, (str, int, float, bool, type(None))):
+                v = str(v)
+            pairs.append({"feature": str(name), "value": v, "contribution": float(val)})
+        
+        total = float(np.sum(np.abs([p["contribution"] for p in pairs])) or 1.0)
+        for p in pairs:
+            p["pct_of_total"] = abs(p["contribution"]) / total
+        pairs.sort(key=lambda d: abs(d["contribution"]), reverse=True)
+        return pairs[:topn]
+    except Exception as err:
+        print("shap_top_contribs_row failed:", err)
+        return []
+
+
 # -------------------- EXPLANATION HELPERS --------------------
 def ebm_top_contribs(X_row: pd.DataFrame, topn: int = 5):
-    import numpy as np
     try:
         if hasattr(MODEL, "explain_local"):
             expl = MODEL.explain_local(X_row, y=None)
@@ -267,7 +776,7 @@ def ebm_top_contribs(X_row: pd.DataFrame, topn: int = 5):
             res.append({"feature": fname, "value": val, "contribution": float(imps[idx]), "pct_of_total": float(imps[idx])})
         return res
 
-    cols = [c for c in ["amount","is_refund","entry_mode","use_chip","mcc_desc","zip3"] if c in X_row.columns]
+    cols = [c for c in ["amount","use_chip","merchant_type"] if c in X_row.columns]
     return [{"feature": c, "value": X_row.iloc[0].get(c, None), "contribution": 0.0, "pct_of_total": 0.0} for c in cols][:topn]
 
 
@@ -291,7 +800,7 @@ def gpt_narrate(pred: int, proba: float, threshold: float, contribs, features: D
         "You are a fraud-detection assistant. "
         "Write a concise, friendly explanation for a non-technical user. "
         "Keep it to 3 short paragraphs: (1) decision & probability, "
-        "(2) one-sentence summary of transaction (amount, location, merchant type if available), "
+        "(2) one-sentence summary of transaction but do not include any imputed variables, "
         "(3) the top 2-3 factors in bullet points. "
         "Avoid jargon; do NOT output JSON."
     )
@@ -314,8 +823,8 @@ def narrate_explanation(pred: int, proba: float, threshold: float, contribs, fea
     label = "FRAUD" if pred==1 else "NOT FRAUD"
     f = features or {}
     amt = f.get("amount", None)
-    city = f.get("merchant_city") or f.get("merchant_state") or f.get("zip3") or "unknown place"
-    cat  = f.get("mcc_desc") or f.get("merchant_type") or "merchant"
+    city = f.get("merchant_city") or f.get("merchant_state") or "unknown place"
+    cat = f.get("merchant_type") or "merchant"
 
     # conclusion
     head = f"**Decision:** {label}  \n**Probability:** {proba:.1%} (cutoff {threshold:.0%})"
@@ -360,12 +869,9 @@ def gpt_extract_intent_and_fields(text: str) -> Dict[str, Any]:
            "amount": 3000.0,
            "merchant_state": "DC",
            "merchant_city": "Washington",
-           "zip3": "200",
-           "mcc_desc": "grocery",
+           "zip": "20001",
            "merchant_type": "grocery",
-           "use_chip": "Unknown",
-           "entry_mode": "Unknown",
-           "is_refund": 0
+           "use_chip": "Unknown"
         },
         "need_example": false,           # give me a fraud/unfraud transaction
         "example_type": "fraud"|"nonfraud"
@@ -394,10 +900,117 @@ Return a single JSON object with keys:
    amount (number),
    merchant_state (2-letter US code if applicable),
    merchant_city (string),
-   zip3 (first 3 digits if available),
-   mcc_desc (one of grocery, gas station, ecommerce, restaurant, travel, furniture, clothing, electronics, other),
-   merchant_type (same as mcc_desc if unknown),
-   use_chip, entry_mode, is_refund (0/1), card_brand, card_type, has_chip.
+   zip,
+   merchant_type (Eating Places and Restaurants,
+        Service Stations,
+        Amusement Parks, Carnivals, Circuses,
+        Grocery Stores, Supermarkets,
+        Tolls and Bridge Fees,
+        Utilities - Electric, Gas, Water, Sanitary,
+        Book Stores,
+        Fast Food Restaurants,
+        Money Transfer,
+        Department Stores,
+        Lumber and Building Materials,
+        Discount Stores,
+        Computer Network Services,
+        Miscellaneous Food Stores,
+        Taxicabs and Limousines,
+        Wholesale Clubs,
+        Miscellaneous Home Furnishing Stores,
+        Motion Picture Theaters,
+        Drinking Places (Alcoholic Beverages),
+        Telecommunication Services,
+        Shoe Stores,
+        Cosmetic Stores,
+        Medical Services,
+        Automotive Service Shops,
+        Drug Stores and Pharmacies,
+        Local and Suburban Commuter Transportation,
+        Digital Goods - Media, Books, Apps,
+        Dentists and Orthodontists,
+        Package Stores, Beer, Wine, Liquor,
+        Sports Apparel, Riding Apparel Stores,
+        Beauty and Barber Shops,
+        Miscellaneous Metalwork,
+        Theatrical Producers,
+        Passenger Railways,
+        Family Clothing Stores,
+        Cable, Satellite, and Other Pay Television Services,
+        Hardware Stores,
+        Betting (including Lottery Tickets, Casinos),
+        Miscellaneous Machinery and Parts Manufacturing,
+        Ship Chandlers,
+        Postal Services - Government Only,
+        Athletic Fields, Commercial Sports,
+        Artist Supply Stores, Craft Shops,
+        Antique Shops,
+        Women's Ready-To-Wear Stores,
+        Cleaning and Maintenance Services,
+        Travel Agencies,
+        Florists Supplies, Nursery Stock and Flowers,
+        Railroad Freight,
+        Semiconductors and Related Devices,
+        Computers, Computer Peripheral Equipment,
+        Gardening Supplies,
+        Lodging - Hotels, Motels, Resorts,
+        Chiropractors,
+        Motor Freight Carriers and Trucking,
+        Insurance Sales, Underwriting,
+        Doctors, Physicians,
+        Industrial Equipment and Supplies,
+        Laundry Services,
+        Books, Periodicals, Newspapers,
+        Car Washes,
+        Lighting, Fixtures, Electrical Supplies,
+        Detective Agencies, Security Services,
+        Legal Services and Attorneys,
+        Railroad Passenger Transport,
+        Electronics Stores,
+        Precious Stones and Metals,
+        Furniture, Home Furnishings, and Equipment Stores,
+        Digital Goods - Games,
+        Recreational Sports, Clubs,
+        Non-Precious Metal Services,
+        Optometrists, Optical Goods and Eyeglasses,
+        Heat Treating Metal Services,
+        Upholstery and Drapery Stores,
+        Steel Products Manufacturing,
+        Welding Repair,
+        Tools, Parts, Supplies Manufacturing,
+        Podiatrists,
+        Electroplating, Plating, Polishing Services,
+        Passenger Railways,
+        Ironwork,
+        Lawn and Garden Supply Stores,
+        Floor Covering Stores,
+        Leather Goods,
+        Non-Ferrous Metal Foundries,
+        Accounting, Auditing, and Bookkeeping Services,
+        Hospitals,
+        Tax Preparation Services,
+        Bus Lines,
+        Pottery and Ceramics,
+        Brick, Stone, and Related Materials,
+        Miscellaneous Fabricated Metal Products,
+        Automotive Body Repair Shops,
+        Heating, Plumbing, Air Conditioning Contractors,
+        Gift, Card, Novelty Stores,
+        Coated and Laminated Products,
+        Airlines,
+        Bolt, Nut, Screw, Rivet Manufacturing,
+        Miscellaneous Metals,
+        Miscellaneous Metal Fabrication,
+        Cruise Lines,
+        Steelworks,
+        Automotive Parts and Accessories Stores,
+        Steel Drums and Barrels,
+        Towing Services,
+        Sporting Goods Stores,
+        Household Appliance Stores,
+        Fabricated Structural Metal Products,
+        Music Stores - Musical Instruments),
+   use_chip, card_brand, card_type, has_chip.
 - Do NOT invent unrealistic values; if unknown, omit the key.
 
 IMPORTANT: Output JSON only.
@@ -420,21 +1033,6 @@ IMPORTANT: Output JSON only.
         return {}
 
 
-# ---------- NATURAL LANGUAGE PARSER (extract amount/city/category) ----------
-CITY_HINTS = {
-    "DC": ["dc", "washington dc", "washington, dc", "d.c."],
-    "NY": ["ny", "new york", "nyc"],
-    "CA": ["ca", "california", "los angeles", "la", "san francisco", "sf"],
-    "VA": ["va", "virginia"],
-    "MD": ["md", "maryland"],
-}
-
-MCC_HINTS = {
-    "grocery": ["grocery", "超市", "杂货"],
-    "gas station": ["gas", "加油站", "汽油"],
-    "ecommerce": ["online", "电商", "网购"],
-}
-
 def parse_nl_to_payload(text: str) -> Dict[str, Any]:
     # prior GPT; fallback to regular
     # 1) GPT
@@ -451,7 +1049,6 @@ def parse_nl_to_payload(text: str) -> Dict[str, Any]:
         try: payload["amount"] = float(amt)
         except: pass
     return payload
-
 
 # -------------------- Tools --------------------
 def tool_lookup(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -498,13 +1095,40 @@ def tool_lookup(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": False, "message": "No lookup key provided.", "hits": 0}
 
 def tool_score_single(payload: Dict[str, Any]) -> Dict[str, Any]:
-    X = align_columns(light_preprocess(pd.DataFrame([payload])))
+    provided_cols = set(payload.keys())
+    X_raw = align_columns(light_preprocess(pd.DataFrame([payload])))
+    not_provided = {c for c in FEATURE_LIST if (c not in provided_cols) or pd.isna(X_raw.iloc[0][c])}
+
+    X = impute_for_model(X_raw.copy())
+
     proba, pred = score_rows(X.copy())
-    contribs = ebm_top_contribs(X.iloc[[0]], topn=5)
+    contribs = shap_top_contribs_row(X.iloc[[0]], topn=5)
+
     feats = snapshot_first_row(X)
     story = gpt_narrate(int(pred[0]), float(proba[0]), float(BEST_TH), contribs, feats)
     if not story:  # fallback to previous template
         story = narrate_explanation(int(pred[0]), float(proba[0]), float(BEST_TH), contribs, feats)
+        # Combine the KB descriptions of the top features into a <details> fold.
+        try:
+            top_feats = [c.get("feature") for c in (contribs or []) if c.get("feature")][:3]
+            blurbs = kb_blurbs_for_features(top_feats, k_each=1)
+            if blurbs:
+                story += "\n\n<details><summary>Knowledge base tips for key features</summary>\n\n"
+                for b in blurbs:
+                    story += f"- **{b['feature']}**：{b['description']}\n"
+                story += "\n</details>"
+        except Exception:
+            pass
+    # SHAP: Generates a waterfall diagram and embeds it below the narrative.
+    try:
+        png_b64 = shap_waterfall_png_for_row(X.iloc[[0]])
+        if png_b64:
+            story += "\n\n**Model explanation (SHAP):**\n\n"
+            story += f'![](data:image/png;base64,{png_b64})'
+            st.image(base64.b64decode(png_b64), caption="Model explanation (SHAP)")
+    except Exception:
+        pass
+
     return {
         "ok": True,
         "pred": int(pred[0]),
@@ -512,8 +1136,102 @@ def tool_score_single(payload: Dict[str, Any]) -> Dict[str, Any]:
         "threshold": float(BEST_TH),
         "features_used": feats,
         "contribs": contribs,
-        "narrative": story
+        "narrative": story,
+        "not_provided": list(not_provided),
     }
+
+def normalize_contribs_ebm(raw):
+    """raw: list of dicts like {'feature':..., 'contrib'/ 'value'/ 'impact': ...}"""
+    pairs = []
+    if not raw:
+        return pairs
+    for c in raw:
+        if isinstance(c, dict):
+            f = c.get("feature") or c.get("name") or c.get("field")
+            v = c.get("contrib", c.get("contribution", c.get("value", c.get("impact", 0.0))))
+            if f is None:
+                continue
+            try:
+                pairs.append((str(f), float(v)))
+            except Exception:
+                pass
+    return pairs
+
+def render_prediction_reply(res: dict, payload: dict, label=None, topn=4, show_features_json=False) -> str:
+    """
+    Output rendered as unified text：
+    - Ground truth
+    - Decision / Probability / Threshold
+    - TopK contrib
+    - Narrative
+    - Features JSON
+    """
+    row_ctx = res.get("row") or res.get("features_used") or {}
+
+    # prob & threshold
+    prob = res.get("pred_proba") or res.get("proba") or res.get("prob") or res.get("score") or 0.0
+    threshold = res.get("threshold", 0.5)
+
+    # unify contrib to [(feat, value)]
+    # items = normalize_contribs_ebm(res.get("contribs") or res.get("contributions"))
+    # items_sorted = sorted(items, key=lambda kv: abs(kv[1]), reverse=True)
+    # topk = items_sorted[:topn]
+
+    # lines = []
+    # for feat, c in topk:
+    #     val = payload.get(feat, row_ctx.get(feat, "(missing)"))
+    #     val_str = f"{val:.2f}" if isinstance(val, float) else str(val)
+    #     lines.append(f"- **{feat} = {val_str}** → contribution: `{c:+.4f}`")
+
+    contribs = res.get("contribs") or []
+    contribs = sorted(contribs, key=lambda d: abs(d.get("contribution", 0.0)), reverse=True)[:topn]
+
+    not_provided = set(res.get("not_provided") or [])
+
+    p = float(prob)
+    sig_grad = p * (1 - p)  # σ'(f)
+
+    lines = []
+    for c in contribs:
+        feat = c.get("feature", "feature")
+        val  = row_ctx.get(feat, c.get("value", "(missing)"))
+        phi  = float(c.get("contribution", 0.0))
+        dp = sig_grad * phi
+        val_str = f"{val:.2f}" if isinstance(val, float) else str(val)
+        tag = " (imputed)" if feat in not_provided else ""
+
+        lines.append(
+            f"- **{feat} = {val_str}{tag}** → logit contribution `{phi:+.3f}`"
+        )
+    
+    decision = "🚩 FRAUD" if prob >= threshold else "✅ NOT FRAUD"
+    header = f"**Decision:** {decision}\n**Probability:** {prob:.2%}  (threshold = {threshold:.0%})"
+
+    if label in (0, 1, "0", "1"):
+        label_txt = "🚩 FRAUD" if int(label) == 1 else "✅ NOT FRAUD"
+        agree = ("✅ **Prediction agrees with label**"
+                 if ((prob >= threshold) == (int(label) == 1)) else
+                 "⚠️ **Prediction disagrees with label**")
+        header = f"**Ground truth:** {label_txt}\n{header}\n{agree}"
+
+    narr_block = (res.get("narrative") or "").strip()
+    fallback_text = "_Factors are very small at this threshold; see SHAP chart below._"
+    numeric_block = header + "\n\n### Top influencing factors (logit space, with probability approximation)\n" + ("\n".join(lines) if lines else fallback_text)
+
+    reply = (narr_block + ("\n\n" if narr_block else "") + numeric_block).strip()
+
+    # JSON
+    if show_features_json and not_provided:
+        features = res.get("features_used")
+        if features:
+            reply += (
+                "\n\nFeatures used\n\n"
+                f"```json\n{json.dumps(_to_jsonable(features), ensure_ascii=False, indent=2)}\n```"
+                "\n"
+            )
+
+    return reply
+
 
 
 def tool_score_batch(df_csv: pd.DataFrame) -> Dict[str, Any]:
@@ -525,12 +1243,54 @@ def tool_score_batch(df_csv: pd.DataFrame) -> Dict[str, Any]:
     buf = io.BytesIO(); out.to_csv(buf, index=False)
     return {"ok": True, "summary": {"rows": int(len(out)), "suspicious": int((pred==1).sum()), "avg_proba": float(np.mean(proba))}, "csv_bytes": buf.getvalue()}
 
+
+# question triggers & pattern words
+QUESTION_TRIGGERS = ["what is","what are","explain","define","why","how","factor"]
+PATTERN_WORDS = ["velocity","spike","cnp","pattern"]
+TXN_ID_RE = re.compile(r"\b(?:txn|t)?\d{6,}\b", re.I)
+# extract feature name from KB
+def _variants(s: str):
+    s = str(s).strip().lower()
+    return {s, s.replace("_"," "), s.replace("-", " "), s.replace(" ", "_")}
+
+def build_feature_terms_from_kb(kb_df):
+    try:
+        feats = kb_df[kb_df["kb_type"]=="feature"]["title"].dropna().astype(str)
+        terms = set()
+        for name in feats:
+            terms |= _variants(name)
+        # backup
+        if not terms:
+            terms = {"has_chip","use_chip","merchant_type","amount","merchant_id","zip","credit_limit"}
+        return terms
+    except Exception:
+        return {"has_chip","use_chip","merchant_type","amount","merchant_id","zip","credit_limit"}
+
+FEATURE_TERMS = build_feature_terms_from_kb(KB_DF)
+
+TXN_ID_RE = re.compile(r"\b(?:txn|t)?\d{6,}\b", re.I)
+def _is_question(t: str) -> bool:
+    tl = (t or "").lower()
+    return any(q in tl for q in QUESTION_TRIGGERS)
+
+def _looks_structured(t: str) -> bool:
+    # JSON like
+    return any(c in t for c in ['{','}',':','=',';'])
+
 def simple_router(text: str) -> Dict[str, Any]:
     t = (text or "").strip()
+    tt = t.lower()
+
+    # if no transaction data provided or user is asking -> RAG
+    has_txn_id = bool(TXN_ID_RE.search(tt))
+    looks_like_question = any(kw in tt for kw in QUESTION_TRIGGERS)
+    looks_like_pattern  = any(kw in tt for kw in PATTERN_WORDS)
+    looks_like_feature_q = looks_like_question and any(term in tt for term in FEATURE_TERMS)
+    if (not has_txn_id) and (looks_like_question or looks_like_pattern or looks_like_feature_q):
+        return {"action": "rag", "payload": {"question": t}}
 
     # GPT first
     data = gpt_extract_intent_and_fields(t) if USE_GPT else {}
-
     if data:
         intent = (data.get("intent") or "").lower()
         if data.get("need_example") is True:
@@ -563,7 +1323,11 @@ def simple_router(text: str) -> Dict[str, Any]:
 
     # single pred by local if necessary
     parsed = parse_nl_to_payload(t)
-    return {"action":"score_single","payload": parsed}
+    # only by parsing the actual fields (such as amount/card_id),allow score_single
+    if parsed and isinstance(parsed, dict) and len(parsed.keys()) > 0:
+        return {"action": "score_single", "payload": parsed}
+    # default: RAG
+    return {"action": "rag", "payload": {"question": t}}
 
 
 left, spacer, right = st.columns([0.6, 0.05, 0.35], gap="large")
@@ -572,7 +1336,7 @@ with left:
     st.subheader("💬 Chat")
     if "history" not in st.session_state:
         st.session_state.history = [
-            {"role":"assistant","content":"Hi! Tell me a txn ID to lookup, or say 'give me a fraud transaction' to see an example."}
+            {"role":"assistant","content":"Hi there! You can ask me anything related to fraud analysis. Tell me a transaction ID, or say “give me an example of fraud” to start."}
         ]
     for msg in st.session_state.history:
         with st.chat_message(msg["role"]): st.markdown(msg["content"])
@@ -588,48 +1352,59 @@ with left:
         reply_text = ""  # collect text
 
         if act == "lookup":
-            res = tool_lookup(payload)
-            if res.get("ok") and res.get("hits", 0) >= 1:
-                row = res.get("row");
-                found_label = res.get("found_label", None)
-                if row is not None:
-                    if found_label in [0, 1]:
-                        label = "FRAUD" if found_label == 1 else "NOT FRAUD"
-                        reply_text = (
-                            f"**This transaction is already labeled as {label} in the dataset "
-                            f"(`is_fraud`={found_label}). No model prediction was needed.**\n\n"
-                            f"```json\n{json.dumps(row, ensure_ascii=False, indent=2)}\n```"
-                        )
-                    else:
-                        X = align_columns(light_preprocess(pd.DataFrame([row])))
-                        proba, pred = score_rows(X.copy())
-                        contribs = ebm_top_contribs(X.iloc[[0]], topn=5)
-                        feats = snapshot_first_row(X)
-                        story = gpt_narrate(int(pred[0]), float(proba[0]), float(BEST_TH), contribs, feats)
-                        if not story:
-                            story = narrate_explanation(int(pred[0]), float(proba[0]), float(BEST_TH), contribs, feats)
-
-                        reply_text = story
-                        reply_text += "\n\n<details><summary>Row details</summary>\n\n"
-                        reply_text += f"```json\n{json.dumps(row, ensure_ascii=False, indent=2)}\n```"
-                        reply_text += "\n</details>"
+            lk = tool_lookup(payload)
+            if not lk.get("ok") or not lk.get("row"):
+                reply_text = lk.get("message", "No result.")
             else:
-                reply_text = res.get("message", "No result.")
+                # hit row & tag
+                row_all = dict(lk["row"])
+                found_label = lk.get("found_label", None)
+
+                # drop is_fraud
+                row_all.pop("is_fraud", None)
+
+                # if already have MODEL_FEATURES / row_to_model_features:
+                # feats = row_to_model_features(row_all)
+                # go back to raw tool_score_single
+                feats = row_all
+
+                # Call scoring
+                res = tool_score_single(feats) or {}
+
+                # Unified rendering
+                reply_text = render_prediction_reply(res, feats, label=found_label, topn=4, show_features_json=True)
 
         elif act == "score_single":
-            res = tool_score_single(payload)
-            # narrative + features
-            reply_text = res["narrative"]
-            reply_text += "\n\n<details><summary>Features used</summary>\n\n"
-            reply_text += f"```json\n{json.dumps(_to_jsonable(res['features_used']), ensure_ascii=False, indent=2)}\n```"
-            reply_text += "\n</details>"
+            res = tool_score_single(payload) or {}
+            reply_text = render_prediction_reply(res, payload, label=None, topn=4, show_features_json=True)
 
-        else:
-            reply_text = "Upload a CSV on the right for batch scoring."
+        elif act == "rag":
+            q = (payload.get("question") or payload.get("query") or "")
+            hits = kb_search(q, k=5)
+            if not hits:
+                reply_text = "Insufficient evidence from knowledge base. Try something else like: velocity spike / CNP / MCC."
+            else:
+                # use GPT
+                answer = gpt_answer_with_kb(q)
+                # RAG citation
+                lines = []
+                for i, r in enumerate(hits[:5], 1):
+                    badge = "🟧 Pattern" if r.get("kb_type") == "pattern" else "🟦 Feature"
+                    title = r.get("title") or "(no title)"
+                    src = r.get("source") or ""
+                    lines.append(f"{i}. **{badge} {title}** — _{src}_")
+
+                reply_text = answer + "\n\n---\n\n**Sources:**\n" + "\n".join(lines)
+
+                # show KB hits,badge + resources
+                with st.expander("Knowledge Base Hits", expanded=False):
+                    for r in hits:
+                        badge = "🟧 Pattern" if r.get("kb_type") == "pattern" else "🟦 Feature"
+                        st.markdown(f"**{badge} {r.get('title', '(no title)')}** · _{r.get('source', '')}_")
+                        st.write(r.get("text", ""))
 
         # append to history
         st.session_state.history.append({"role": "assistant", "content": reply_text})
-
         # output the history
         st.rerun()
 
@@ -648,7 +1423,6 @@ with right:
                 st.download_button("Download scored CSV", data=res["csv_bytes"], file_name="scored.csv", mime="text/csv")
             else:
                 st.error(res.get("message","Batch failed."))
-
 
 import streamlit.components.v1 as components
 
