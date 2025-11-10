@@ -13,14 +13,25 @@ import matplotlib.pyplot as plt
 from dotenv import load_dotenv
 load_dotenv()
 
+# -------------------------------------------------
+# --- FraudLens Header (logo left, GW logo right) ---
+# -------------------------------------------------
+from pathlib import Path
+import base64
+from textwrap import dedent
+import streamlit as st
 
-st.set_page_config(page_title="FraudLens", page_icon="🤖", layout="wide")
+st.set_page_config(
+    page_title="FraudLens — Responsible AI for Fraud Detection",
+    page_icon="image/1.png",   # ✅ favicon
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-# --- FraudLens header (logo + title aligned left, GW logo right) ---
 def header_with_inline_logo(left_img: str,
                             gw_img: str,
                             title="FraudLens",
-                            subtitle="A professional fraud detection assistant",
+                            subtitle="EXPLAIN • DETECT • DEFEND",
                             height=64,
                             gw_width=160):
     left_logo = ""
@@ -46,13 +57,25 @@ def header_with_inline_logo(left_img: str,
       display:flex;
       justify-content:space-between;
       align-items:center;
-      margin-bottom:0.8rem;
+      margin-top:0.5rem;
+      margin-bottom:0.5rem;
     }}
     .header-left {{
       display:flex; align-items:center; gap:12px;
     }}
-    .header-title {{ font-size:2.3rem; font-weight:700; color:white; margin:0; }}
-    .header-subtitle {{ color:gray; font-size:1.1rem; margin-top:-0.2rem; }}
+    .header-title {{
+      font-size:2.3rem;
+      font-weight:700;
+      color:white;
+      margin:0;
+    }}
+    .header-subtitle {{
+      color:#00B0A8;
+      font-size:1.1rem;
+      margin-top:-0.2rem;
+      font-weight:600;
+      letter-spacing:1px;
+    }}
     </style>
     <div class="header-container">
       <div class="header-left">
@@ -67,10 +90,16 @@ def header_with_inline_logo(left_img: str,
     """)
     st.markdown(html, unsafe_allow_html=True)
 
+
+# -------------------------------------------------
+# Call header
+# -------------------------------------------------
 header_with_inline_logo("image/1.png", "image/GWSB Short White.png")
-st.caption("A professional fraud detection assistant — now with explanations for every decision.")
 
 
+# -------------------------------------------------
+# Page Style (dark theme + fixes)
+# -------------------------------------------------
 st.markdown("""
 <style>
 /* -------- Page background -------- */
@@ -78,18 +107,69 @@ st.markdown("""
     background-color: #1D314F !important;
 }
 
-/* -------- Make all text readable on dark background -------- */
+/* -------- General text -------- */
 html, body, [class*="css"] {
     color: #FFFFFF !important;
 }
 
-/* subtitle */
+/* -------- Subheaders (like Chat, Batch Analysis) -------- */
+h1, h2, h3, h4, h5, h6, .stMarkdown h2, .stSubheader, .stMarkdown h3 {
+    color: #FFFFFF !important;
+    font-weight: 700 !important;
+}
+
+/* -------- Subtitle and markdown text -------- */
 .stCaption, .stMarkdown p {
     color: #CCCCCC !important;
+}
+
+/* -------- Chat text and responses -------- */
+.stChatMessage p,
+.stChatMessage span,
+.stChatMessage div,
+.stChatMessage code,
+.stMarkdown li,
+.stMarkdown a {
+    color: #FFFFFF !important;
+}
+
+/* -------- Link color (FraudLens teal) -------- */
+.stMarkdown a, .stChatMessage a {
+    color: #00B0A8 !important;
+    text-decoration: none !important;
+    font-weight: 500 !important;
+}
+.stMarkdown a:hover, .stChatMessage a:hover {
+    text-decoration: underline !important;
+}
+
+/* -------- Inline code styling (like refund_count_30d) -------- */
+.stChatMessage code, .stMarkdown code {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #00E0D0 !important;
+    font-weight: 500 !important;
+    border-radius: 4px !important;
+    padding: 2px 5px !important;
+}
+
+/* -------- Full code blocks -------- */
+.stMarkdown pre code {
+    background-color: #12263F !important;
+    color: #E0E6ED !important;
+    border-radius: 8px !important;
+    padding: 8px !important;
+}
+
+/* -------- Optional: lighten user chat bubble -------- */
+.stChatMessage[data-testid="stChatMessage-user"] * {
+    color: #E3E9F2 !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
+# -------------------------------------------------
+# Model & Data Paths
+# -------------------------------------------------
 MODEL_PATH = "./_model_/ebm_fraud_model.pkl"
 MERGED_CSV = "./_data_/_merge_/merged_data.csv"
 
@@ -1409,20 +1489,54 @@ with left:
         st.rerun()
 
 with right:
-    st.subheader("📦 Batch Analysis")
+    # ---------- Styled container for Batch Analysis ----------
+    st.markdown(
+        """
+        <div style="
+            padding: 20px;
+            background-color: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+            ">
+        """,
+        unsafe_allow_html=True
+    )
+
+    # ---------- Header ----------
+    st.markdown(
+        "<h3 style='font-weight:700; color:#00B0A8; letter-spacing:0.5px; margin-bottom:1rem;'>📦 Batch Analysis</h3>",
+        unsafe_allow_html=True
+    )
+
+    # ---------- File Uploader ----------
     up = st.file_uploader("Upload CSV", type=["csv"])
     if up is not None:
-        try: df_csv = pd.read_csv(up)
+        try:
+            df_csv = pd.read_csv(up)
         except Exception as e:
-            st.error(f"Failed to read CSV: {e}"); df_csv = None
-        if df_csv is not None and st.button("Run batch scoring"):
+            st.error(f"Failed to read CSV: {e}")
+            df_csv = None
+
+        if df_csv is not None and st.button("Run Batch Scoring", use_container_width=True):
             with st.spinner("Scoring batch..."):
                 res = tool_score_batch(df_csv)
+
             if res.get("ok"):
+                st.success("Scoring complete!")
                 st.write(res["summary"])
-                st.download_button("Download scored CSV", data=res["csv_bytes"], file_name="scored.csv", mime="text/csv")
+                st.download_button(
+                    "⬇️ Download Scored CSV",
+                    data=res["csv_bytes"],
+                    file_name="scored.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
             else:
-                st.error(res.get("message","Batch failed."))
+                st.error(res.get("message", "Batch failed."))
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
 
 import streamlit.components.v1 as components
 
