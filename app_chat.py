@@ -789,6 +789,80 @@ def shap_top_contribs_row(X_row: pd.DataFrame, topn: int = 5):
         return []
 
 
+
+# -------------------- UNIFIED BEHAVIORAL + RAG EXPLANATION --------------------
+
+def build_behavior_dict(row: dict) -> dict:
+    """Extract basic behavioral indicators for a single transaction."""
+    return {
+        "hour": row.get("hour"),
+        "dayofweek": row.get("dayofweek"),
+        "amount": row.get("amount"),
+        "merchant_city": row.get("merchant_city", "Unknown"),
+        "merchant_state": row.get("merchant_state", "Unknown"),
+        "merchant_type": row.get("merchant_type", "Unknown"),
+        "use_chip": row.get("use_chip", "Unknown"),
+        "card_type": row.get("card_type", "Unknown"),
+    }
+
+def behavioral_narrative(behavior: dict) -> str:
+    """Human-readable narrative of behavioral signals."""
+    hour = behavior.get("hour")
+    state = behavior.get("merchant_state", "Unknown")
+    mtype = behavior.get("merchant_type", "merchant")
+    chip = behavior.get("use_chip", "Unknown")
+    amount = behavior.get("amount")
+    if amount is None:
+        amount_txt = "an unusual amount"
+    else:
+        try:
+            amount_txt = f"${float(amount):,.2f}"
+        except Exception:
+            amount_txt = str(amount)
+    time_txt = f"at {hour}:00" if isinstance(hour, (int, float)) and 0 <= hour < 24 else "at an unusual time"
+    chip_txt = "without chip usage" if str(chip).lower() in ["no","false","0"] else "using chip"
+    return (
+        f"The transaction occurred {time_txt} in {state}, at a {mtype.lower()} merchant "
+        f"for {amount_txt}, {chip_txt}. This behavior differs from the customer's typical pattern "
+        f"and may indicate account misuse or compromised credentials."
+    )
+
+def shap_plain_language(contribs: list) -> str:
+    """Convert SHAP top features into a concise, analyst-friendly explanation."""
+    if not contribs:
+        return "No key risk drivers were identified for this transaction."
+    lines = []
+    for c in contribs[:3]:
+        f = c.get("feature","feature").replace("_"," ").title()
+        v = c.get("value","?")
+        weight = c.get("pct_of_total",0)*100
+        direction = "increased" if c.get("contribution",0)>0 else "decreased"
+        lines.append(f"{f} = {v} ({direction} risk, ~{weight:.0f}% influence)")
+    return "; ".join(lines) + "."
+
+def unified_explanation(txn_id: str, ebm_score: float, shap_data: list, row: dict) -> str:
+    """Compose a unified analyst narrative using EBM + SHAP + behavioral + RAG knowledge."""
+    score_pct = int(round(100*ebm_score))
+    behavior_text = behavioral_narrative(build_behavior_dict(row))
+    shap_summary = shap_plain_language(shap_data)
+
+    # Retrieve brief RAG context for top features
+    top_feats = [c["feature"] for c in shap_data[:3] if "feature" in c]
+    kb_contexts = []
+    for f in top_feats:
+        hits = kb_search(f, k=1)
+        if hits:
+            kb_contexts.append(f"**{f}**: {hits[0]['text']}")
+    kb_text = " ".join(kb_contexts) if kb_contexts else "No supporting context found in knowledge base."
+
+    narrative = (
+        f"Transaction **{txn_id or 'N/A'}** shows a model-estimated fraud risk of **{score_pct}%**. "
+        f"{behavior_text} The model identified the following major risk drivers: {shap_summary} "
+        f"Context from the fraud knowledge base highlights: {kb_text} "
+        f"Together, these indicators suggest heightened risk and warrant further analyst review."
+    )
+    return narrative.strip()
+
 # -------------------- EXPLANATION HELPERS --------------------
 def ebm_top_contribs(X_row: pd.DataFrame, topn: int = 5):
     try:
