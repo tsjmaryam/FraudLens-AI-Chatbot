@@ -7,6 +7,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics.pairwise import linear_kernel
 import shap
+import difflib
 import traceback
 from textwrap import dedent
 import matplotlib.pyplot as plt
@@ -16,11 +17,6 @@ load_dotenv()
 # -------------------------------------------------
 # --- FraudLens Header (logo left, GW logo right) ---
 # -------------------------------------------------
-from pathlib import Path
-import base64
-from textwrap import dedent
-import streamlit as st
-
 st.set_page_config(
     page_title="FraudLens — Responsible AI for Fraud Detection",
     page_icon="image/1.png",   # ✅ favicon
@@ -414,12 +410,11 @@ def compute_baseline_fill() -> Dict[str, Any]:
 
 BASELINE_FILL = compute_baseline_fill()
 
-
 # ---------------------- Markdown KB load ----------------------
 @st.cache_resource(show_spinner=False)
 def load_patterns_md(md_path: str) -> pd.DataFrame:
     """
-    read markdown kb：based on “## title + Body paragraph”。
+    read markdown kb: based on "## title + Body paragraph".
     return DataFrame: [title, text, source, kb_type]
     """
     p = Path(md_path)
@@ -453,11 +448,7 @@ def load_kb():
     PATTERNS_MD_PATH  = "./.doc/fraud_knowledge_base_patterns.md"
 
     # 1) read feature CSV
-    try:
-        kb_csv = pd.read_csv(FEATURES_CSV_PATH, encoding="utf-8")
-    except Exception:
-        kb_csv = pd.read_csv(FEATURES_CSV_PATH, sep=";", encoding_errors="ignore")
-
+    kb_csv = pd.read_csv(FEATURES_CSV_PATH)
     if "text" not in kb_csv.columns:
         kb_csv["text"] = (
             kb_csv.get("category", "").astype(str).str.strip() + " || " +
@@ -472,22 +463,35 @@ def load_kb():
     kb_csv["kb_type"] = "feature"
     kb_csv = kb_csv[["title","text","source","kb_type"]].copy()
 
-    # 2) read Markdown
-    kb_md = load_patterns_md(PATTERNS_MD_PATH)  # -> [title,text,source,kb_type]
+    # 2) patterns MD
+    kb_md = load_patterns_md(PATTERNS_MD_PATH)
+    # --- enrich: extract backticked related features into a column ---
+    def _extract_related(text):
+        m = re.search(r"(?i)related\s*features\s*:\s*(.+)", text)
+        if not m: return []
+        raw = m.group(1)
+        return re.findall(r"`([^`]+)`", raw)
+    if not kb_md.empty:
+        kb_md["related_features"] = kb_md["text"].apply(_extract_related)
+        # normalize to a clean list of strings
+        kb_md["related_features"] = kb_md["related_features"].apply(
+            lambda v: [str(x).strip() for x in (v or [])]
+        )
+        # lower-cased set for fast overlap later
+        kb_md["related_features_lc"] = kb_md["related_features"].apply(
+            lambda L: {x.lower() for x in L}
+        )
 
-    # 3) merge and clean
+    # 3) clean
     kb = pd.concat([kb_csv, kb_md], ignore_index=True)
     kb["text"] = kb["text"].fillna("").astype(str)
     kb = kb[kb["text"].str.strip() != ""].drop_duplicates(subset=["kb_type","title","text"])
-
-    # 4) build TF-IDF
     if kb.empty:
         return kb, None, None
 
     kb["__fulltext"] = (kb["title"].fillna("") + " " + kb["text"].fillna("")).str.lower()
     vectorizer = TfidfVectorizer(max_features=30000, ngram_range=(1, 2))
     matrix = vectorizer.fit_transform(kb["__fulltext"])
-
     return kb, vectorizer, matrix
 
 KB_DF, KB_VEC, KB_MAT = load_kb()
@@ -529,7 +533,7 @@ def kb_search(query: str, k: int = 5, score_threshold: float = 0.10):
     for _, row in KB_DF[mask].head(k).iterrows():
         fb1.append({
             "title": str(row.get("title","")),
-            "text":  str(row.get("text","")),
+            "text":   str(row.get("text","")),
             "source":str(row.get("source","")),
             "kb_type":row.get("kb_type",""),
             "score": 0.09
@@ -538,7 +542,6 @@ def kb_search(query: str, k: int = 5, score_threshold: float = 0.10):
         return fb1
 
     # P2: fuzzy match title
-    import difflib
     scored = []
     for i, row in KB_DF.iterrows():
         ratio = difflib.SequenceMatcher(None, qn, _norm(row.get("title",""))).ratio()
@@ -551,7 +554,7 @@ def kb_search(query: str, k: int = 5, score_threshold: float = 0.10):
         row = KB_DF.iloc[i]
         fb2.append({
             "title": str(row.get("title","")),
-            "text":  str(row.get("text","")),
+            "text":   str(row.get("text","")),
             "source":str(row.get("source","")),
             "kb_type":row.get("kb_type",""),
             "score": float(ratio)
@@ -568,7 +571,7 @@ def kb_blurbs_for_features(names: List[str], k_each: int = 1):
     out = []
     for n in (names or []):
         # in tags
-        hit = KB_DF.loc[KB_DF.get("tags", pd.Series([])).astype(str).str.contains(fr"\b{re.escape(str(n))}\b", case=False, regex=True)]
+        hit = KB_DF.loc[KB_DF.get("tags", pd.Series(dtype=object)).astype(str).str.contains(fr"\b{re.escape(str(n))}\b", case=False, regex=True)]
         if not hit.empty:
             for _, r in hit.head(k_each).iterrows():
                 out.append({"feature": n, "description": str(r.get("text",""))})
@@ -578,20 +581,6 @@ def kb_blurbs_for_features(names: List[str], k_each: int = 1):
         for r in top:
             out.append({"feature": n, "description": r["text"]})
     return out
-
-def detect_lang(s: str) -> str:
-    """
-    language detection
-    """
-    s = str(s or "")
-    # if have Chinese characters
-    if any('\u4e00' <= ch <= '\u9fff' for ch in s):
-        return "zh"
-    # have English words
-    if re.search(r"[A-Za-z]", s):
-        return "en"
-    # backup: en
-    return "en"
 
 def gpt_answer_with_kb(question: str) -> str:
     ctx = kb_search(question, k=5)
@@ -607,14 +596,10 @@ def gpt_answer_with_kb(question: str) -> str:
         bullets.append(f"- {badge} **{title}** · _{src}_\n  {txt}")
     context = "\n".join(bullets)
 
-    lang = detect_lang(question)
-    lang_name = "Chinese" if lang == "zh" else "English"
-
     sys = (
-        "You are a fraud analytics assistant.\n"
+        "You are a post-flag analysis assistant.\n"
         "ONLY use the provided context; if something is missing, say you don't know.\n"
         "Be concise and practical.\n"
-        f"Reply ONLY in {lang_name}."
     )
     user = f"Question:\n{question}\n\nContext:\n{context}"
 
@@ -789,9 +774,7 @@ def shap_top_contribs_row(X_row: pd.DataFrame, topn: int = 5):
         return []
 
 
-
 # -------------------- UNIFIED BEHAVIORAL + RAG EXPLANATION --------------------
-
 def build_behavior_dict(row: dict) -> dict:
     """Extract basic behavioral indicators for a single transaction."""
     return {
@@ -863,75 +846,95 @@ def unified_explanation(txn_id: str, ebm_score: float, shap_data: list, row: dic
     )
     return narrative.strip()
 
-# -------------------- EXPLANATION HELPERS --------------------
-def ebm_top_contribs(X_row: pd.DataFrame, topn: int = 5):
-    try:
-        if hasattr(MODEL, "explain_local"):
-            expl = MODEL.explain_local(X_row, y=None)
-            data = expl.data()
-            names = data.get("names") or data.get("feature_names") or FEATURE_LIST
-            scores = data.get("scores")
-            values = data.get("values") or [{}]
-            scores_row = scores[0] if isinstance(scores, list) and scores and isinstance(scores[0], (list, tuple, np.ndarray)) else scores
-            values_row = values[0] if isinstance(values, list) and values else values
-            pairs = []
-            for i, name in enumerate(names or []):
-                try:
-                    s = float(scores_row[i])
-                except Exception:
+
+def rag_context_from_contribs(contribs, k_each: int = 1, max_patterns: int = 4):
+    """
+    Build a compact, deduped RAG context from KB for the top SHAP features.
+    Returns (context_text, source_list) where source_list is a list of "title — source".
+    """
+    if not contribs or KB_DF is None:
+        return "", []
+    
+    # --- Top features (defensive: string-ify, drop Nones) ---
+    top_feats = []
+    for c in sorted(contribs, key=lambda x: abs(x.get("contribution", 0) or 0), reverse=True)[:4]:
+        name = c.get("feature")
+        if name is None:
+            continue
+        top_feats.append(str(name))
+    if not top_feats:
+        return "", []
+    top_lc = {t.lower() for t in top_feats}
+    
+    lines, sources, seen = [], [], set()
+
+    # 1) Feature definitions (same as before)
+    for f in top_feats:
+        hits = kb_search(f, k=k_each, score_threshold=0.10) or []
+        for h in hits:
+            title = (h.get("title") or "").strip()
+            if (h.get("kb_type") == "feature") and title and title not in seen:
+                seen.add(title)
+                snippet = (h.get("text","")).strip()[:400]
+                lines.append(f"- [Feature] {title}: {snippet}")
+                sources.append(f"{title} — {h.get('source','')}")
+
+    # helper: wildcard/prefix-aware match for terms like "velocity_*"
+    def _matches(term_lc: str, top_set: set[str]) -> bool:
+        if term_lc.endswith("*"):
+            prefix = term_lc[:-1]
+            return any(t.startswith(prefix) for t in top_set)
+        return term_lc in top_set
+
+    # 2) Pattern selection via structured "related_features"
+    if "related_features" in KB_DF.columns:
+        # sanitize to list for all rows
+        rf_series = KB_DF["related_features"].apply(
+            lambda v: list(v) if isinstance(v, (list, tuple, set))
+            else ([] if (v is None or (isinstance(v, float) and pd.isna(v))) else [str(v)])
+        )
+
+        # lower-case once
+        rf_lc_series = rf_series.apply(lambda L: [str(x).lower().strip() for x in L])
+
+        # compute overlap with wildcard support
+        overlap_counts = []
+        for L in rf_lc_series:
+            cnt = sum(1 for term in L if _matches(term, top_lc))
+            overlap_counts.append(cnt)
+
+        KB_DF["_overlap"] = overlap_counts
+
+        # choose patterns with >0 overlap, sort by overlap desc then title
+        cand = KB_DF[(KB_DF.get("kb_type") == "pattern") & (KB_DF["_overlap"] > 0)] \
+                  .sort_values(by=["_overlap", "title"], ascending=[False, True]) \
+                  .head(max_patterns)
+
+        for _, r in cand.iterrows():
+            title = (r.get("title") or "").strip()
+            if not title or title in seen:
+                continue
+            txt = (r.get("text") or "").strip()[:500]
+            seen.add(title)
+            lines.append(f"- [Pattern] {title}: {txt}")
+            sources.append(f"{title} — {r.get('source','')}")
+        KB_DF.drop(columns=["_overlap"], errors="ignore", inplace=True)
+    else:
+        # fallback: TF-IDF search restricted to patterns, one per top feature
+        for f in top_feats:
+            hits = [h for h in (kb_search(f, k=4, score_threshold=0.10) or []) if h.get("kb_type") == "pattern"]
+            for h in hits[:max_patterns]:
+                title = (h.get("title") or "").strip()
+                if not title or title in seen:
                     continue
+                txt = (h.get("text") or "").strip()[:500]
+                seen.add(title)
+                lines.append(f"- [Pattern] {title}: {txt}")
+                sources.append(f"{title} — {h.get('source','')}")
 
-                # ---- Get the value and convert it to a JSON-compatible type. ----
-                val = None
-                try:
-                    val = values_row[i]
-                except Exception:
-                    try:
-                        val = X_row.iloc[0].get(name, None)
-                    except Exception:
-                        val = None
-
-                # NumPy → Python
-                try:
-                    import numpy as np
-                    if isinstance(val, np.generic):  # 包含 np.int64, np.float64 等
-                        val = val.item()
-                except Exception:
-                    pass
-
-
-                if not isinstance(val, (str, int, float, bool, type(None))):
-                    val = str(val)
-
-                pairs.append({
-                    "feature": str(name),
-                    "value": val,
-                    "contribution": float(s)
-                })
-
-
-            total = sum(abs(p["contribution"]) for p in pairs) or 1.0
-            for p in pairs:
-                p["pct_of_total"] = abs(p["contribution"]) / total
-            pairs.sort(key=lambda d: abs(d["contribution"]), reverse=True)
-            return pairs[:topn]
-
-    except Exception:
-        pass
-
-    if hasattr(MODEL, "feature_importances_") and FEATURE_LIST:
-        imps = np.array(getattr(MODEL, "feature_importances_")).astype(float)
-        imps = imps / (imps.sum() or 1.0)
-        order = np.argsort(-imps)[:topn]
-        res = []
-        for idx in order:
-            fname = FEATURE_LIST[idx]
-            val = X_row.iloc[0].get(fname, None)
-            res.append({"feature": fname, "value": val, "contribution": float(imps[idx]), "pct_of_total": float(imps[idx])})
-        return res
-
-    cols = [c for c in ["amount","use_chip","merchant_type"] if c in X_row.columns]
-    return [{"feature": c, "value": X_row.iloc[0].get(c, None), "contribution": 0.0, "pct_of_total": 0.0} for c in cols][:topn]
+    # finalize
+    context = "\n".join(lines).strip()
+    return context, sources
 
 
 def gpt_narrate(pred: int, proba: float, threshold: float, contribs, features: Dict[str, Any]) -> str:
@@ -939,36 +942,70 @@ def gpt_narrate(pred: int, proba: float, threshold: float, contribs, features: D
         return ""
 
     label = "FRAUD" if pred==1 else "NOT FRAUD"
-    # Assemble the facts
+
+    # Assemble the facts block that should *never* contradict the RAG text
     brief = {
         "decision": label,
         "probability": round(float(proba), 4),
         "threshold": round(float(threshold), 4),
-        "top_factors": contribs[:5] if isinstance(contribs, list) else [],
+        "top_factors": contribs[:4] if isinstance(contribs, list) else [],
         "features_used": features or {},
     }
     brief = _to_jsonable(brief)
 
+    # === NEW: build RAG context from contribs ===
+    rag_ctx, rag_sources = rag_context_from_contribs(contribs, k_each=1)
 
-    sys = (
-        "You are a fraud-detection assistant. "
-        "Write a concise, friendly explanation for a non-technical user. "
-        "Keep it to 3 short paragraphs: (1) decision & probability, "
-        "(2) one-sentence summary of transaction but do not include any imputed variables, "
-        "(3) the top 2-3 factors in bullet points. "
-        "Avoid jargon; do NOT output JSON."
+    # If no KB hits, keep the old behavior (LLM without context)
+    # Otherwise, strongly ground to the context
+    sys_grounded = (
+        "You are a post-flag analysis assistant.\n"
+        "You MUST ground your explanation ONLY in the provided context below.\n"
+        "If something is not in the context, say you don't know.\n"
+        "Write for non-technical analysts. Be concise and logically sound.\n"
+        "Structure: two paragraph with short narrative tying the top contributing features to the KB features and KB patterns.\n"
+        "(1) Use KB feature definitions to explain SHAP top contributors. Be logical based on their contributions to fraud, do not make things up.\n"
+        "(2) Summarize the corresponding KB risk patterns if related to the top contributors.\n"
+        "Do not output JSON."    )
+    
+    sys_ungrounded  = (
+        "You are a post-flag analysis assistant.\n"
+        "Write a concise, friendly explanation for a non-technical user.\n"
+        "Keep it to 2 short paragraphs.\n"
+        "(1) one-sentence summary of the transaction but do not include any imputed variables.\n"
+        "(2) tell a story based on the top contributers, limit to a short paragraph.\n"
+        "Avoid jargon; Do not output JSON."
     )
-    user = f"Facts to explain:\n{json.dumps(brief, ensure_ascii=False)}"
+
+    if rag_ctx:
+        user_msg = (
+            f"Facts:\n{json.dumps(brief, ensure_ascii=False)}\n\n"
+            f"Context (from internal fraud knowledge base):\n{rag_ctx}\n\n"
+            "Only use the context above when giving reasons."
+        )
+        sys = sys_grounded
+    else:
+        user_msg = f"Facts:\n{json.dumps(brief, ensure_ascii=False)}"
+        sys = sys_ungrounded
 
     try:
         resp = client.chat.completions.create(
             model=OPENAI_MODEL,
-            messages=[{"role":"system","content":sys},{"role":"user","content":user}],
-            temperature=0.4,
+            messages=[{"role":"system","content":sys},
+                      {"role":"user","content":user_msg}],
+            temperature=0.3,
         )
-        return resp.choices[0].message.content.strip()
+        text = resp.choices[0].message.content.strip()
+        # append compact sources when grounded
+        if rag_ctx and rag_sources:
+            src_lines1 = "fraud_knowledge_base_features.csv"
+            src_lines2 = "fraud_knowledge_base_patterns.md"
+            text += "\n\n##### Sources\n"
+            text += f"- {src_lines1}\n"
+            text += f"- {src_lines2}\n\n"
+        return text
     except Exception as e:
-        print("GPT narration failed:", e)
+        print("GPT narration (RAG) failed:", e)
         return ""
 
 
@@ -993,13 +1030,13 @@ def narrate_explanation(pred: int, proba: float, threshold: float, contribs, fea
         amt_txt = "unknown amount"
     summary = f"**Summary:** {amt_txt} at **{cat}** in **{city}**."
 
-    # 3 key factors
+    # 4 key factors
     if not contribs:
         reasons = "_No explanation available for this model._"
     else:
-        top3 = contribs[:3]
+        top4 = contribs[:4]
         parts = []
-        for c in top3:
+        for c in top4:
             name = c.get("feature","feature")
             val  = c.get("value","?")
             share = f"{c.get('pct_of_total',0)*100:.0f}%"
@@ -1257,32 +1294,19 @@ def tool_score_single(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     proba, pred = score_rows(X.copy())
     contribs = shap_top_contribs_row(X.iloc[[0]], topn=5)
-
     feats = snapshot_first_row(X)
-    story = gpt_narrate(int(pred[0]), float(proba[0]), float(BEST_TH), contribs, feats)
-    if not story:  # fallback to previous template
-        story = narrate_explanation(int(pred[0]), float(proba[0]), float(BEST_TH), contribs, feats)
-        # Combine the KB descriptions of the top features into a <details> fold.
-        try:
-            top_feats = [c.get("feature") for c in (contribs or []) if c.get("feature")][:3]
-            blurbs = kb_blurbs_for_features(top_feats, k_each=1)
-            if blurbs:
-                story += "\n\n<details><summary>Knowledge base tips for key features</summary>\n\n"
-                for b in blurbs:
-                    story += f"- **{b['feature']}**：{b['description']}\n"
-                story += "\n</details>"
-        except Exception:
-            pass
+
     # SHAP: Generates a waterfall diagram and embeds it below the narrative.
+    story = ""
     try:
         png_b64 = shap_waterfall_png_for_row(X.iloc[[0]])
         if png_b64:
-            story += "\n\n**Model explanation (SHAP):**\n\n"
+            story += "\n\n##### FraudLens explanation:\n\n"
             story += f'![](data:image/png;base64,{png_b64})'
-            st.image(base64.b64decode(png_b64), caption="Model explanation (SHAP)")
+            # st.image(base64.b64decode(png_b64), caption="Model explanation (SHAP)")
     except Exception:
         pass
-
+    
     return {
         "ok": True,
         "pred": int(pred[0]),
@@ -1359,18 +1383,37 @@ def render_prediction_reply(res: dict, payload: dict, label=None, topn=4, show_f
         )
     
     decision = "🚩 FRAUD" if prob >= threshold else "✅ NOT FRAUD"
-    header = f"**Decision:** {decision}\n**Probability:** {prob:.2%}  (threshold = {threshold:.0%})"
+    header = f"\n\n**Decision:** {decision}\n\n**Probability:** {prob:.2%}  (threshold = {threshold:.0%})\n\n"
 
     if label in (0, 1, "0", "1"):
         label_txt = "🚩 FRAUD" if int(label) == 1 else "✅ NOT FRAUD"
-        agree = ("✅ **Prediction agrees with label**"
-                 if ((prob >= threshold) == (int(label) == 1)) else
-                 "⚠️ **Prediction disagrees with label**")
-        header = f"**Ground truth:** {label_txt}\n{header}\n{agree}"
+        header = f"**Ground truth:** {label_txt}\n{header}\n"
+
+    pred = prob >= threshold
+
+    X_raw = align_columns(light_preprocess(pd.DataFrame([payload])))
+    X = impute_for_model(X_raw.copy())
+    features = snapshot_first_row(X)
+
+    story = gpt_narrate(pred, prob, threshold, contribs, features)
+    if not story:  # fallback to previous template
+        story = narrate_explanation(pred, prob, threshold, contribs, features)
+        # Combine the KB descriptions of the top features into a <details> fold.
+        try:
+            top_feats = [c.get("feature") for c in (contribs or []) if c.get("feature")][:3]
+            blurbs = kb_blurbs_for_features(top_feats, k_each=1)
+            if blurbs:
+                story += "\n\n<details><summary>Knowledge base tips for key features</summary>\n\n"
+                for b in blurbs:
+                    story += f"- **{b['feature']}**：{b['description']}\n"
+                story += "\n</details>"
+        except Exception:
+            pass
+    header += story
 
     narr_block = (res.get("narrative") or "").strip()
     fallback_text = "_Factors are very small at this threshold; see SHAP chart below._"
-    numeric_block = header + "\n\n### Top influencing factors (logit space, with probability approximation)\n" + ("\n".join(lines) if lines else fallback_text)
+    numeric_block = header + "\n##### Top influencing factors (logit space)\n" + ("\n".join(lines) if lines else fallback_text)
 
     reply = (narr_block + ("\n\n" if narr_block else "") + numeric_block).strip()
 
@@ -1379,14 +1422,12 @@ def render_prediction_reply(res: dict, payload: dict, label=None, topn=4, show_f
         features = res.get("features_used")
         if features:
             reply += (
-                "\n\nFeatures used\n\n"
+                "\n\n##### Features used\n\n"
                 f"```json\n{json.dumps(_to_jsonable(features), ensure_ascii=False, indent=2)}\n```"
                 "\n"
             )
 
     return reply
-
-
 
 def tool_score_batch(df_csv: pd.DataFrame) -> Dict[str, Any]:
     if df_csv is None or df_csv.empty:
@@ -1397,11 +1438,6 @@ def tool_score_batch(df_csv: pd.DataFrame) -> Dict[str, Any]:
     buf = io.BytesIO(); out.to_csv(buf, index=False)
     return {"ok": True, "summary": {"rows": int(len(out)), "suspicious": int((pred==1).sum()), "avg_proba": float(np.mean(proba))}, "csv_bytes": buf.getvalue()}
 
-
-# question triggers & pattern words
-QUESTION_TRIGGERS = ["what is","what are","explain","define","why","how","factor"]
-PATTERN_WORDS = ["velocity","spike","cnp","pattern"]
-TXN_ID_RE = re.compile(r"\b(?:txn|t)?\d{6,}\b", re.I)
 # extract feature name from KB
 def _variants(s: str):
     s = str(s).strip().lower()
@@ -1421,68 +1457,90 @@ def build_feature_terms_from_kb(kb_df):
         return {"has_chip","use_chip","merchant_type","amount","merchant_id","zip","credit_limit"}
 
 FEATURE_TERMS = build_feature_terms_from_kb(KB_DF)
-
 TXN_ID_RE = re.compile(r"\b(?:txn|t)?\d{6,}\b", re.I)
-def _is_question(t: str) -> bool:
-    tl = (t or "").lower()
-    return any(q in tl for q in QUESTION_TRIGGERS)
 
-def _looks_structured(t: str) -> bool:
-    # JSON like
-    return any(c in t for c in ['{','}',':','=',';'])
+# --- Helpers: detect obvious fields / key=value filters / amounts ---
+FIELD_NAME_SET = {s.lower() for s in (FEATURE_LIST or [])} | {
+    "amount","merchant_state","merchant_city","zip","merchant_type",
+    "use_chip","card_brand","card_type","has_chip","id","txn_id","transaction_id"
+}
+
+KV_RE   = re.compile(r"\b([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*([^\s,;]+)", re.I)
+MONEY_RE= re.compile(r"(?:^|\s)\$?\d{1,3}(?:,\d{3})*(?:\.\d+)?(?:\s|$)")
+
+def _looks_like_question(text: str) -> bool:
+    t = text.strip()
+    tl = t.lower()
+    # must end with "?" OR start with a clear interrogative; avoid over-firing on statements
+    return t.endswith("?") or tl.startswith(("what ", "why ", "how ", "which ", "when ", "where "))
+
+def _has_obvious_fields_or_amount(text: str) -> bool:
+    tl = text.lower()
+    if MONEY_RE.search(tl):
+        return True
+    # any known field name token?
+    return any(fr"\b{re.escape(name)}\b" and (name in tl) for name in FIELD_NAME_SET)
 
 def simple_router(text: str) -> Dict[str, Any]:
     t = (text or "").strip()
-    tt = t.lower()
-
-    # if no transaction data provided or user is asking -> RAG
-    has_txn_id = bool(TXN_ID_RE.search(tt))
-    looks_like_question = any(kw in tt for kw in QUESTION_TRIGGERS)
-    looks_like_pattern  = any(kw in tt for kw in PATTERN_WORDS)
-    looks_like_feature_q = looks_like_question and any(term in tt for term in FEATURE_TERMS)
-    if (not has_txn_id) and (looks_like_question or looks_like_pattern or looks_like_feature_q):
-        return {"action": "rag", "payload": {"question": t}}
-
-    # GPT first
+    tl = t.lower()
+    
+    # 0) Explicit examples
+    if re.search(r"\b(non[-\s]?fraud|not\s+fraud|legit)\b", tl):
+        return {"action":"lookup","payload":{"need_example":True,"type":"nonfraud"}}
+    if re.search(r"\bgive me (a|one)?\s*fraud (txn|transaction|example)\b", tl):
+        return {"action":"lookup","payload":{"need_example":True,"type":"fraud"}}
+    
+    # 1) Try GPT intent/fields FIRST (highest quality)
     data = gpt_extract_intent_and_fields(t) if USE_GPT else {}
     if data:
-        intent = (data.get("intent") or "").lower()
+        # example request
         if data.get("need_example") is True:
             return {"action":"lookup","payload":{"need_example": True, "type": data.get("example_type","fraud")}}
-        if intent == "lookup":
-            if data.get("filters"):
-                return {"action":"lookup","payload":{"filters": data["filters"]}}
-            # consider id tag as direct filter
-            if "id" in data.get("filters", {}):
-                return {"action":"lookup","payload": {"id": data["filters"]["id"]}}
-            return {"action":"lookup","payload":{}}
-        if intent == "batch":
+        # lookup with filters (including id/txn_id)
+        if (data.get("intent") or "").lower() == "lookup":
+            flt = (data.get("filters") or {}).copy()
+            for k in ("id","txn_id","transaction_id"):
+                if k in flt:
+                    return {"action":"lookup","payload":{k: flt[k]}}
+            return {"action":"lookup","payload":{"filters": flt}} if flt else {"action":"lookup","payload":{}}
+        # batch
+        if (data.get("intent") or "").lower() == "batch":
             return {"action":"batch","payload":{}}
-
+        # score_single if any normalized fields
         if data.get("fields"):
             return {"action":"score_single","payload": data["fields"]}
 
-    # —— if GPT not available ——
-    tt = t.lower()
-    if re.search(r"\b(non[-\s]?fraud|not\s+fraud|legit)\b", tt):
-        return {"action":"lookup","payload":{"need_example":True,"type":"nonfraud"}}
-    if "give me a fraud transaction" in tt or (("fraud" in tt) and ("example" in tt or "sample" in tt or "give me" in tt)):
-        return {"action":"lookup","payload":{"need_example":True,"type":"fraud"}}
-    m = re.search(r"(txn[_\s]?id|transaction[_\s]?id|id)[:=\s]+([A-Za-z0-9\-\_]+)", tt)
-    if m:
-        return {"action":"lookup","payload":{m.group(1).replace(" ","_"): m.group(2)}}
-    if tt.startswith("lookup") or tt.startswith("check "):
-        pairs = dict(re.findall(r"(\w+)\s*=\s*([^\s,]+)", tt))
-        return {"action":"lookup","payload":{"filters":pairs}}
+    # 2) Lightweight deterministic parsing (key=value pairs, id, numbers → score_single/lookup)
+    #    Prefer doing something actionable before falling back to RAG.
 
-    # single pred by local if necessary
+    # 2a) id/txn_id
+    for key in ("txn_id","transaction_id","id"):
+        m = re.search(rf"\b{key}\b[:=\s]+([A-Za-z0-9\-\_]+)", tl)
+        if m:
+            return {"action":"lookup","payload":{key: m.group(1)}}
+        
+    # 2b) key=value filters → lookup
+    kv_pairs = dict(KV_RE.findall(t))
+    if kv_pairs:
+        return {"action":"lookup","payload":{"filters": kv_pairs}}
+    
+    # 2c) numbers / amount / obvious field mentions → score_single
+    if _has_obvious_fields_or_amount(t):
+        parsed = parse_nl_to_payload(t)
+        if parsed:
+            return {"action":"score_single","payload": parsed}
+        
+    # 3) Only now consider RAG (tightened)
+    #    RAG if it *looks like* a real question AND it’s not obviously a scoring/lookup request.
+    if _looks_like_question(t) or any(w in tl for w in ("pattern", "cnp", "velocity", "spike", "mcc change")):
+        return {"action":"rag","payload":{"question": t}}
+
+    # 4) Last resort: try scoring if we can extract anything, else RAG.
     parsed = parse_nl_to_payload(t)
-    # only by parsing the actual fields (such as amount/card_id),allow score_single
-    if parsed and isinstance(parsed, dict) and len(parsed.keys()) > 0:
-        return {"action": "score_single", "payload": parsed}
-    # default: RAG
-    return {"action": "rag", "payload": {"question": t}}
-
+    if parsed:
+        return {"action":"score_single","payload": parsed}
+    return {"action":"rag","payload":{"question": t}}
 
 left, spacer, right = st.columns([0.6, 0.05, 0.35], gap="large")
 
@@ -1500,8 +1558,8 @@ with left:
         st.session_state.history.append({"role": "user", "content": user_msg})
 
         # count reply_text
-        route = simple_router(user_msg);
-        act = route["action"];
+        route = simple_router(user_msg)
+        act = route["action"]
         payload = route.get("payload", {})
         reply_text = ""  # collect text
 
