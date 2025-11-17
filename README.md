@@ -61,15 +61,15 @@ FraudLens-AI-Chatbot/
 │   └── README.md
 │
 │── .gitattributes                       # Git LFS tracking
-│── Fraud_EBM_Final.ipynb                # Notebook for training the EBM model
+│── Fraud_EBM_Final.ipynb                # Jupyter Notebook for training the EBM model
 │── LICENSE                              # MIT License
 │── README.md                            # Main repository README (homepage)
 │── app_chat.py                          # Main Streamlit Chatbot UI
-│── app_chat_indicators.py               # Indicators-based version of chatbot
-│── app_chat_updated.py                  # Updated chatbot (WIP or alternate)
-│── fraudlens.py                         # Fraud scoring + logic helpers
+│── app_chat_indicators.py               # Indicators-based version of chatbot 
+│── app_chat_updated.py                  # Updated chatbot  with behavioral pattern narrative
+│── fraudlens.py                         # Fraud scoring and logic helpers
 │── launch_win.bat                       # Windows launcher for the app
-│── logo.png                             # Project logo
+│── logo.png                             # Project logo and GWSB logo
 │── requirements.txt                     # Python dependencies (actual package list)
 
 ```
