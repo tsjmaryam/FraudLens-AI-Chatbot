@@ -20,6 +20,7 @@ FraudLens is an interpretable fraud-analysis assistant designed to help analysts
 ├── .doc/                    # RAG knowledge sources
 ├── image/                   # Logos and supporting imagery referenced by the UI
 └── launch_win.bat           # Helper scripts for launching Streamlit locally
+└── evaluation_graphs        # EBM Model Evaluation graphs
 ```
 
 ## Getting started
