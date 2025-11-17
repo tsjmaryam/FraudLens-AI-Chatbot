@@ -52,7 +52,7 @@ The server will launch at `http://localhost:8501` by default. Make sure the expe
 - Update `requirements.txt` whenever new libraries are introduced.
 - The SHAP explainer caches background samples via `@st.cache_resource`; restart Streamlit if you need to invalidate cached data after modifying the dataset.
 
-## Data Source
+## Data source
 - Kaggle open source datasets: https://www.kaggle.com/code/yashjadwani/financial-fraud-analysis/notebook.
 - It includes `transactions_data.csv`, `users_data.csv`, `cards_data.csv`, `mcc_codes.json`, `train_fraud_labels.json`.
 
