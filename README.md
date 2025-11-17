@@ -71,7 +71,9 @@ FraudLens-AI-Chatbot/
 │── launch_win.bat                       # Windows launcher for the app
 │── logo.png                             # Project logo and GWSB logo
 │── requirements.txt                     # Python dependencies (actual package list)
-
+└── Architectural_Diagram/               # System's architectural diagram
+    ├── Architectural Diagram.png        # Final architecture visual
+    └── README.md                        # Explanation of the diagram
 ```
 
 ## Getting started
