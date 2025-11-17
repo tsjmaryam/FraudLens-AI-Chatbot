@@ -57,4 +57,6 @@ The server will launch at `http://localhost:8501` by default. Make sure the expe
 - It includes `transactions_data.csv`, `users_data.csv`, `cards_data.csv`, `mcc_codes.json`, `train_fraud_labels.json`.
 
 ## License
-This project is licensed under the terms described in the [LICENSE](./LICENSE) file.
+## License
+This project is licensed under the MIT License.  
+See the [LICENSE](./LICENSE) file for details.
