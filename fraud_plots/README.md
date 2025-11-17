@@ -1,0 +1,1 @@
+This folder contains fraud-related visualizations, including risk distributions, fraud vs. non-fraud comparisons, anomaly detection plots, feature-level fraud patterns, and other graphics used to understand fraudulent behavior in the dataset.
