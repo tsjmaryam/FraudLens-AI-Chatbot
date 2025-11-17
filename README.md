@@ -13,7 +13,7 @@ FraudLens is an interpretable fraud-analysis assistant designed to help analysts
 ## Repository layout
 
 ```
-├── app_chat_indicators.py              # Main Streamlit application (FraudLens UI, chat, SHAP, scoring)
+├── app_chat_indicators.py   # Main Streamlit application (FraudLens UI, chat, SHAP, scoring)
 ├── requirements.txt         # Python dependencies needed to run the application
 ├── _model_/                 # Stores serialized EBM model artifacts (ebm_fraud_model.pkl)
 ├── _data_/_merge_/          # Contains the merged_data.csv feature table used for inference/explanations
