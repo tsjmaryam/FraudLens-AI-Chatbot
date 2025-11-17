@@ -1,4 +1,4 @@
-# FraudLens - An Responsible AI Fraud Explanation Chatbot
+# FraudLens - A Responsible AI Fraud Explanation Chatbot
 
 FraudLens is an interpretable fraud-analysis assistant designed to help analysts understand why a transaction is flagged. They system combines a surrogate Explainable Boosting Machine (EBM), SHAP explanations, and a FAISS-based RAG knowledge layer to turn complex model behavior and rule-based fraud signals into clear, human-readable narratives. It is built for transparency, regulatory alignment, and rapid analyst review in modern fraud-detection workflows.
 
