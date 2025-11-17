@@ -15,8 +15,7 @@ FraudLens is an interpretable fraud-analysis assistant designed to help analysts
 
 ## Repository layout
 
-```
-FraudLens-AI-Chatbot/
+```FraudLens-AI-Chatbot/
 │
 ├── .doc/                                # RAG knowledge base (features + patterns)
 │   ├── fraud_knowledge_base_features.csv
@@ -63,20 +62,26 @@ FraudLens-AI-Chatbot/
 ├── requirements/                        # Requirements explanation document
 │   └── README.md
 │
+├── Youtube_channel/                     # Demo videos, YouTube links, media assets
+│   └── README.md                        # Description + links to video demos
+│
 │── .gitattributes                       # Git LFS tracking
 │── Fraud_EBM_Final.ipynb                # Jupyter Notebook for training the EBM model
 │── LICENSE                              # MIT License
 │── README.md                            # Main repository README (homepage)
 │── app_chat.py                          # Main Streamlit Chatbot UI
 │── app_chat_indicators.py               # Indicators-based version of chatbot 
-│── app_chat_updated.py                  # Updated chatbot  with behavioral pattern narrative
+│── app_chat_updated.py                  # Updated chatbot with behavioral narrative
 │── fraudlens.py                         # Fraud scoring and logic helpers
 │── launch_win.bat                       # Windows launcher for the app
 │── logo.png                             # Project logo and GWSB logo
 │── requirements.txt                     # Python dependencies (actual package list)
+│
 └── Architectural_Diagram/               # System's architectural diagram
     ├── Architectural Diagram.png        # Final architecture visual
     └── README.md                        # Explanation of the diagram
+
+
 ```
 
 ## Getting started
