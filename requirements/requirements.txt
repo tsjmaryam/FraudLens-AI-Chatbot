@@ -5,7 +5,8 @@ scikit-learn>=1.4
 interpret>=0.5
 joblib>=1.4
 python-dotenv>=1.0
-openai>=1.30
+gpt-3.5-turbo
 matplotlib>=3.8
 seaborn>=0.13
 tqdm>=4.66
+
