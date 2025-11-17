@@ -1,13 +1,13 @@
 # FraudLens - A Responsible AI Fraud Explanation Chatbot
 
-FraudLens is an interpretable fraud-analysis assistant designed to help analysts understand why a transaction is flagged. They system combines a surrogate Explainable Boosting Machine (EBM), SHAP explanations, and a FAISS-based RAG knowledge layer to turn complex model behavior and rule-based fraud signals into clear, human-readable narratives. It is built for transparency, regulatory alignment, and rapid analyst review in modern fraud-detection workflows.
+FraudLens is an interpretable fraud-analysis assistant designed to help analysts understand why a transaction is flagged. They system combines a surrogate Explainable Boosting Machine (EBM), SHAP explanations, and a TF-IDF based RAG knowledge layer to turn complex model behavior and rule-based fraud signals into clear, human-readable narratives. It is built for transparency, regulatory alignment, and rapid analyst review in modern fraud-detection workflows.
 
 ## Key features
 
 - **LLM-powered interaction & explanation** – routes natural-language questions through OpenAI's `gpt-3.5-turbo` (or any compatible model) via the `OPENAI_API_KEY` environment variable, allowing investigators to request justifications, metrics, or transformations and receive grounded narrative explanations that blend EBM scores, SHAP contributors, and retrieved domain definitions.
 - **Explainable ML scoring** – loads an EBM model artifact from `_model_/ebm_fraud_model.pkl` to approximate internal rule-based fraud logic. The surrogate model produces stable, interpretable feature-level risk contributions and transparent per-transaction scores.
 - **Local SHAP explanation layer** – computes SHAP values for every scored transaction, revealing how each feature increases or decreases the predicted risk relative to the model baseline. This exposes the top positive and negative drivers behind each decision.
-- **Retrieval-Augmented explanations (FAISS RAG)** – builds a FAISS vector index from feature definitions and curated fraud-risk patterns. Retrieved context is injected into the LLM so explanations remain accurate, grounded, and domain-aligned instead of generic.
+- **Retrieval-Augmented explanations (TF-IDF RAG)** – builds a TF-IDF vector from feature definitions and curated fraud-risk patterns. Retrieved context is injected into the LLM so explanations remain accurate, grounded, and domain-aligned instead of generic.
 - **Streamlit interface** – provides a clean, user-friendly chat-style UI for inputs, model outputs, SHAP plots, and explanation text, with clear prompts or warnings when required data or model files are missing.
 
 ## Repository layout
