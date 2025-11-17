@@ -13,16 +13,65 @@ FraudLens is an interpretable fraud-analysis assistant designed to help analysts
 ## Repository layout
 
 ```
-├── app_chat_indicators.py   # Main Streamlit application (FraudLens UI, chat, SHAP, scoring)
-├── requirements.txt         # Python dependencies needed to run the application
-├── _model_/                 # Stores serialized EBM model artifacts (ebm_fraud_model.pkl)
-├── _data_/_merge_/          # Contains the merged_data.csv feature table used for inference/explanations
-├── .doc/                    # RAG knowledge sources
-├── image/                   # Logos and supporting imagery referenced by the UI
-└── launch_win.bat           # Helper scripts for launching Streamlit locally
-└── evaluation_graphs        # EBM Model Evaluation graphs
-└── full_dataset             # Raw dataset used for EBM modeling
-└── fraud_plot               # Exploratory Data Analysis of the data
+FraudLens-AI-Chatbot/
+│
+├── .doc/                                # RAG knowledge base (features + patterns)
+│   ├── fraud_knowledge_base_features.csv
+│   └── fraud_knowledge_base_patterns.md
+│
+├── Project_readme/                      # Extended project documentation
+│   └── README.md
+│
+├── _model_/                             # Trained EBM model artifacts
+│   └── ebm_fraud_model.pkl
+│
+├── evaluation_graphs/                   # Model evaluation visuals
+│   ├── Calibration curve.png
+│   ├── ROC curve.png
+│   ├── confusion matrix.png
+│   ├── percision recall curve.png
+│   └── README.md
+│
+├── fraud_plots/                         # EDA visualizations
+│   ├── README.md
+│   ├── cardtype.png
+│   ├── chipusage.png
+│   ├── clientnetwork.png
+│   ├── dayoftheweek.png
+│   ├── fraudarte.png
+│   ├── fraudrateby_darkweb.png
+│   ├── houroftheday.png
+│   ├── merchanype.png
+│   ├── Detect unusual merchants or transactions.png
+│   └── Detect whether the transaction ...png
+│
+├── full_dataset/                        # All dataset files used for FraudLens
+│   ├── README.md
+│   ├── cards_data.csv
+│   ├── df_merged_small.csv
+│   ├── transactions_data.csv
+│   └── users_data.csv
+│
+├── image/                               # UI and logo images
+│   ├── 1.png
+│   ├── GWSB Short White.png
+│   └── logo option2.png
+│
+├── requirements/                        # Requirements explanation document
+│   └── README.md
+│
+│── .gitattributes                       # Git LFS tracking
+│── Fraud_EBM_Final.ipynb                # Notebook for training the EBM model
+│── LICENSE                              # MIT License
+│── README.md                            # Main repository README (homepage)
+│── app_chat.py                          # Main Streamlit Chatbot UI
+│── app_chat_indicators.py               # Indicators-based version of chatbot
+│── app_chat_updated.py                  # Updated chatbot (WIP or alternate)
+│── fraudlens.py                         # Fraud scoring + logic helpers
+│── launch_win.bat                       # Windows launcher for the app
+│── logo.png                             # Project logo
+│── requirements.txt                     # Python dependencies (actual package list)
+
 ```
 
 ## Getting started
