@@ -77,12 +77,16 @@ FraudLens is an interpretable fraud-analysis assistant designed to help analysts
 │── logo.png                             # Project logo and GWSB logo
 │── requirements.txt                     # Python dependencies (actual package list)
 │
-└── Architectural_Diagram/               # System's architectural diagram
-    ├── Architectural Diagram.png        # Final architecture visual
-    └── README.md                        # Explanation of the diagram
-
-
-```
+├── Architectural_Diagram/               # System's architectural diagram
+│   ├── Architectural Diagram.png        # Final architecture visual
+│   └── README.md                        # Explanation of the diagram
+│
+└── poster_and_slides/                   # Poster and presentation materials
+    ├── README.md                        # Description of poster + slides
+    ├── Poster.png                       # Poster image
+    ├── Poster.pdf                       # Final poster
+    ├── Draft Presentation Deck.pptx     # Draft deck
+    └── Final Presentation Deck.pdf      # Final deck
 
 ## Getting started
 
