@@ -87,7 +87,7 @@ FraudLens is an interpretable fraud-analysis assistant designed to help analysts
     ├── Poster.pdf                       # Final poster
     ├── Draft Presentation Deck.pptx     # Draft deck
     └── Final Presentation Deck.pdf      # Final deck
-
+```
 ## Getting started
 
 ### Prerequisites
