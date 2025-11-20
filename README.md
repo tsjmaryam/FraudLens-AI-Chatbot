@@ -110,7 +110,7 @@ FraudLens is an interpretable fraud-analysis assistant designed to help analysts
 ### Running the app
 Start Streamlit and point it at the main application module:
 ```bash
-streamlit run app_chat.py
+streamlit run app_chat_indicators.py
 ```
 The server will launch at `http://localhost:8501` by default. Make sure the expected `_model_`, `_data_/_merge_` and `.doc` artifacts exist before launching. Otherwise the interface will raise warnings and disable certain features.
 
