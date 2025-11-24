@@ -70,7 +70,8 @@ FraudLens is an interpretable fraud-analysis assistant designed to help analysts
 │── LICENSE                              # MIT License
 │── README.md                            # Main repository README (homepage)
 │── app_chat.py                          # Main Streamlit Chatbot UI
-│── app_chat_indicators.py               # Indicators-based version of chatbot 
+│── app_chat_indicators.py               # Indicators-based version of Chatbot
+│── app_chat_indicators_decision.py      # Most updated version of our Chatbot
 │── app_chat_updated.py                  # Updated chatbot with behavioral narrative
 │── fraudlens.py                         # Fraud scoring and logic helpers
 │── launch_win.bat                       # Windows launcher for the app
@@ -110,7 +111,7 @@ FraudLens is an interpretable fraud-analysis assistant designed to help analysts
 ### Running the app
 Start Streamlit and point it at the main application module:
 ```bash
-streamlit run app_chat_indicators.py
+streamlit run app_chat_indicators_decision.py
 ```
 The server will launch at `http://localhost:8501` by default. Make sure the expected `_model_`, `_data_/_merge_` and `.doc` artifacts exist before launching. Otherwise the interface will raise warnings and disable certain features.
 
