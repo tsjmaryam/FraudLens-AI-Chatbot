@@ -1,11 +1,15 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/tsjmaryam/FraudLens-AI-Chatbot/main/logo.png" alt="FraudLens Logo" width="220">
+  <img src="https://raw.githubusercontent.com/tsjmaryam/FraudLens-AI-Chatbot/main/logo.png" alt="FraudLens Logo" width="260">
 </p>
 
-© 2025 Maryam Shahbaz Ali, Pingyi Xu, Tyler Ordiway, Zihui Chen  
-Released under the MIT License.
+<p align="center">
+  © 2025 Maryam Shahbaz Ali, Pingyi Xu, Tyler Ordiway, Zihui Chen  
+  <br>
+  Released under the MIT License.
+</p>
 
-# FraudLens - A Responsible AI Fraud Explanation Chatbot
+---
+# FraudLens - From Alerts to Insights: Responsible AI for Fraud Detection
 
 FraudLens is an interpretable fraud-analysis assistant designed to help analysts understand why a transaction is flagged. They system combines a surrogate Explainable Boosting Machine (EBM), SHAP explanations, and a TF-IDF based RAG knowledge layer to turn complex model behavior and rule-based fraud signals into clear, human-readable narratives. It is built for transparency, regulatory alignment, and rapid analyst review in modern fraud-detection workflows.
 
