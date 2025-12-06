@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/tsjmaryam/FraudLens-AI-Chatbot/main/logo.png" alt="FraudLens Logo" width="220">
+</p>
+
 © 2025 Maryam Shahbaz Ali, Pingyi Xu, Tyler Ordiway, Zihui Chen  
 Released under the MIT License.
 
