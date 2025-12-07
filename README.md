@@ -130,6 +130,13 @@ The server will launch at `http://localhost:8501` by default. Make sure the expe
 ## Data source
 - Kaggle open source datasets: https://www.kaggle.com/code/yashjadwani/financial-fraud-analysis/notebook.
 - It includes `transactions_data.csv`, `users_data.csv`, `cards_data.csv`, `mcc_codes.json`, `train_fraud_labels.json`.
+  
+## Acknowledgments
+We gratefully acknowledge the guidance of our industry judges and advisors, whose insights shaped the direction and grounding of this project. We thank Maysam Kashipour (Capital One) for helping us narrow our problem framing and design a realistic, analyst-focused solution; Brian Clark and Benjamin Pickett (EY) for their clarity on value, impact, and organizational trust; Matthew Finan (Mizuho Financial Group) for deep feedback on explainability, behavioral patterns, and workflow design; Dillon A. De Benedetto (SMBC) for sharing practical fraud-analysis expertise and real-world investigative patterns; and Steve Deering and Jerome Prieur (FI Consulting) for their emphasis on data quality, simplicity, and user-centered design.
+
+We also express our sincere appreciation to Professor Patrick Hall, our faculty mentor, for his continuous support in responsible AI, model transparency, and rigorous evaluation. His guidance played a foundational role in shaping the principles behind FraudLens.
+
+Their collective expertise made this project stronger, clearer, and more aligned with real analyst needs.
 
 ## License
 This project is licensed under the MIT License.  
