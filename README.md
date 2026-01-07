@@ -33,7 +33,7 @@ FraudLens is an interpretable fraud-analysis assistant designed to help analysts
 │   └── README.md
 │
 ├── _model_/                             # Trained EBM model artifacts
-│   └── ebm_fraud_model.pkl
+│   └── EBM_fraud_model.pkl
 │
 ├── evaluation_graphs/                   # Model evaluation visuals
 │   ├── Calibration curve.png
@@ -101,7 +101,7 @@ FraudLens is an interpretable fraud-analysis assistant designed to help analysts
 
 ### Prerequisites
 - A valid OpenAI API key with access to the chosen chat-completion model
-- EBM model artifact saved at `_model_/ebm_fraud_model.pkl`
+- EBM model artifact saved at `_model_/EBM_fraud_model.pkl`
 - Merged transaction dataset saved at `_data_/_merge_/merged_data.csv`
 - RAG knowledge saved at `.doc/fraud_knowledge_base_features.csv` and `.doc/fraud_knowledge_base_patterns.md`
 
