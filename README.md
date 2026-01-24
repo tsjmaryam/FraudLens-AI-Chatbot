@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  © 2025 Maryam Shahbaz Ali, Pingyi Xu, Tyler Ordiway, Zihui Chen  
+  © 2025 Maryam Shahbaz Ali, Tyler Ordiway, Zihui Chen, Pingyi Xu
   <br>
   Released under the MIT License.
 </p>
